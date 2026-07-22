@@ -53,7 +53,7 @@ cannot support a genuine multimodal model on its own. Full rationale in
 
 ```
 model/       Python — signal preprocessing + PyTorch model
-api/         Python — FastAPI service (health/info now; prediction + report later)
+api/         Python — FastAPI service (health/info + multimodal POST /predict; report later)
 dashboard/   TypeScript / Next.js — visualization (Phase 4)
 docs/        design decisions + architecture notes
 ```
@@ -64,7 +64,7 @@ docs/        design decisions + architecture notes
 |------:|-------|--------|
 | 0 | Scaffolding: structure, README, disclaimer, design docs | ✅ done |
 | 1 | Minimal **ECG-only** model + prediction endpoint | ✅ done |
-| 2 | Add **PPG + accelerometer** (multimodal) + preprocessing tests | ⬜ planned |
+| 2 | Add **PPG + accelerometer** (multimodal) + preprocessing tests | ✅ done |
 | 3 | **Claude API** explanation layer + prompt/disclaimer design | ⬜ planned |
 | 4 | **Next.js** dashboard | ⬜ planned |
 | 5 | `v0.1.0` release + honest metrics (incl. limitations) | ⬜ planned |
@@ -80,17 +80,17 @@ pip install -e "model[train,dev]"
 # 1. Fetch PPG-DaLiA (~2.6 GB, CC BY 4.0) into ./data — downloaded, never committed
 python model/scripts/download_data.py
 
-# 2. Train the Phase 1 ECG-only classifier (all 15 subjects; ~4.5 min on CPU)
-python -m biosignal_model.train              # --smoke for a fast pipeline check
-#   -> writes model/checkpoints/ecg_phase1.pt  and  model/metrics/phase1_ecg.json
+# 2. Train the multimodal classifier (all 15 subjects; a few min on CPU)
+python -m biosignal_model.train              # phase 2 (multimodal); --phase 1 = ECG-only baseline, --smoke = fast check
+#   -> writes model/checkpoints/multimodal_phase2.pt  and  model/metrics/phase2_multimodal.json
 
 # 3. Serve it: health + info + POST /predict
 pip install -e "api[dev,predict]"
 uvicorn biosignal_api.main:app --reload      # http://127.0.0.1:8000  ->  / · /health · /predict · /docs
 
-# One ECG window (8 s @ 64 Hz = 512 samples) -> activity + confidence + disclaimer
+# One 8 s window per modality (ECG/PPG = 512 samples; ACC = 512 [x,y,z] triples) -> activity + confidence + disclaimer
 curl -s -X POST localhost:8000/predict -H 'content-type: application/json' \
-     -d "{\"ecg\": $(python -c 'import json;print(json.dumps([0.0]*512))')}"
+     -d "$(python -c 'import json;print(json.dumps({"ecg":[0.0]*512,"ppg":[0.0]*512,"acc":[[0.0,0.0,0.0]]*512}))')"
 
 pytest model/ api/
 ```
