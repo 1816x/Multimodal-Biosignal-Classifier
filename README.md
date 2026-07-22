@@ -105,7 +105,7 @@ health/info work standalone. Copy `.env.example` to `.env` to override `DATA_DIR
 **honestly**, including limitations, and not inflated. Full numbers (per-class,
 confusion matrix, hyperparameters) live in
 [`model/metrics/phase1_ecg.json`](model/metrics/phase1_ecg.json); reproduce with
-`python -m biosignal_model.train`.
+`python -m biosignal_model.train --phase 1`.
 
 - **Split is by subject** (train S1–S11, val S12–S13, **test S14–S15**) — no window
   from a test subject is ever seen in training. This is the honest setup: PPG-DaLiA's
@@ -132,6 +132,35 @@ ceiling Phase 2 is meant to lift: the wrist **accelerometer + PPG** observe move
 directly, which is what these confusable classes need. Per the project plan the
 tests cover deterministic preprocessing; model quality is documented here with
 metrics, not asserts.
+
+### Phase 2 — multimodal (ECG + PPG + accelerometer)
+
+Fusing the wrist **PPG + 3-axis accelerometer** with the ECG lifts test accuracy from
+**0.371 → 0.650** on the **same held-out subjects (S14–S15)**, so the comparison is
+head-to-head. Full numbers in
+[`model/metrics/phase2_multimodal.json`](model/metrics/phase2_multimodal.json); reproduce
+with `python -m biosignal_model.train` (multimodal is the default).
+
+| Model | Split | Accuracy | Macro F1 | Weighted F1 | n |
+|---|---|---|---|---|---|
+| ECG-only (Phase 1) | Test (S14–S15) | 0.371 | 0.385 | 0.371 | 6,134 |
+| **Multimodal (Phase 2)** | **Test (S14–S15)** | **0.650** | **0.676** | **0.620** | **6,134** |
+| Multimodal (Phase 2) | Validation (S12–S13) | 0.712 | 0.748 | 0.744 | 6,334 |
+
+Per-class **test F1, multimodal vs ECG-only**: `cycling` 0.99 (was 0.74), `table_soccer`
+**0.83 (was 0.03)**, `sitting` 0.80 (0.49), `stairs` 0.73 (0.61), `driving` 0.69 (0.30),
+`lunch_break` 0.60 (0.38), `working` 0.41 (0.28), `walking` 0.36 (0.26). A ~158k-parameter
+model — one 1-D CNN encoder per modality, late-fused — trained in ~13.5 min on CPU.
+
+**Honest read.** The accelerometer supplies exactly the *motion* signal ECG lacked:
+`table_soccer` goes from effectively unlearnable (F1 0.03) to 0.83, and every class
+improves. But 0.65 is a genuine result, not a solved task — `walking` stays weakest
+(recall 0.24, still confused with `stairs`/`sitting`), and the long, sedentary look-alike
+desk activities (`working`, `lunch_break`) remain hard. **Environment caveat:** the sandbox
+disk held 14 of 15 subject files, so this run trained on **10 of Phase 1's 11 training
+subjects** (S6 omitted); validation and test are the **identical** held-out subjects
+(S12–S13 / S14–S15), which is what keeps the comparison fair. The exact split is recorded
+in the metrics JSON.
 
 ## Design decisions
 
