@@ -191,6 +191,11 @@ def train_model(model, train_ds, val_ds, train_cfg, class_names):
 
 
 # ----------------------------------------------------------------------------- CLI
+def _subject_list(s: str) -> tuple[int, ...]:
+    """Parse a comma-separated subject list like ``1,2,3`` into ``(1, 2, 3)``."""
+    return tuple(int(x) for x in s.split(",") if x.strip())
+
+
 def _apply_smoke(train_cfg):
     """Fast end-to-end validation: few subjects, few epochs (not a real result)."""
     from dataclasses import replace
@@ -212,6 +217,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument("--out", default=None, help="checkpoint output path (default: per-phase preset)")
     parser.add_argument("--metrics", default=None, help="metrics JSON output path (default: per-phase preset)")
+    parser.add_argument("--train-subjects", type=_subject_list, default=None,
+                        help="override subject-wise split, e.g. 1,2,3 (default: preset)")
+    parser.add_argument("--val-subjects", type=_subject_list, default=None, help="override val subjects")
+    parser.add_argument("--test-subjects", type=_subject_list, default=None, help="override test subjects")
     parser.add_argument("--smoke", action="store_true", help="fast pipeline check on a few subjects")
     args = parser.parse_args()
 
@@ -223,6 +232,9 @@ def main() -> None:
         base, epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.lr,
         weight_decay=args.weight_decay, stride_seconds=args.stride_seconds, seed=args.seed,
         checkpoint_path=args.out or base.checkpoint_path, metrics_path=args.metrics or base.metrics_path,
+        train_subjects=args.train_subjects or base.train_subjects,
+        val_subjects=args.val_subjects or base.val_subjects,
+        test_subjects=args.test_subjects or base.test_subjects,
     )
     if args.smoke:
         train_cfg = _apply_smoke(train_cfg)
