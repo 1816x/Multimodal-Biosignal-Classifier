@@ -53,3 +53,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# ---- Claude Code (personal, per-machine) ----
+# Project-wide config (.claude/settings.json) IS committed; local overrides are not.
+.claude/settings.local.json
