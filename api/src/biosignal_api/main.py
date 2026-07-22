@@ -1,8 +1,9 @@
 """FastAPI application.
 
-Health + info (with the educational disclaimer) plus the Phase 1 `POST /predict`
-endpoint, which serves the ECG-only activity classifier. The Claude-generated report
-endpoint arrives in Phase 3. The disclaimer travels with every prediction response.
+Health + info (with the educational disclaimer) plus the `POST /predict` endpoint,
+which serves the multimodal (ECG + PPG + accelerometer) activity classifier. The
+Claude-generated report endpoint arrives in Phase 3. The disclaimer travels with every
+prediction response.
 
 Educational prototype — NOT a medical device.
 """
@@ -11,7 +12,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 
 from . import __version__
-from .predict import ModelUnavailable, predict_ecg
+from .predict import ModelUnavailable, predict
 from .schemas import HealthResponse, PredictionRequest, PredictionResponse, ServiceInfo
 
 DISCLAIMER = (
@@ -45,20 +46,29 @@ def root() -> ServiceInfo:
         disclaimer=DISCLAIMER,
         dataset="PPG-DaLiA (UCI #495, CC BY 4.0)",
         modalities=["ecg", "ppg", "acc"],
-        status="Phase 1 — ECG-only activity classification available at POST /predict",
+        status="Phase 2 — multimodal (ECG + PPG + accelerometer) activity classification at POST /predict",
     )
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(request: PredictionRequest) -> PredictionResponse:
-    """Classify one ECG window into a PPG-DaLiA activity (Phase 1, ECG-only).
+def predict_endpoint(request: PredictionRequest) -> PredictionResponse:
+    """Classify one multimodal window into a PPG-DaLiA activity.
 
-    PPG/ACC in the request are accepted but ignored until Phase 2. Every response
-    carries the educational disclaimer. Returns 503 if the trained model is not
-    available (not yet trained, or the training stack isn't installed).
+    The model uses whichever modalities its checkpoint was trained on (ECG-only for a
+    Phase 1 checkpoint, or the full ECG + PPG + accelerometer set for Phase 2). Provide a
+    window per required modality; omitting one the model needs yields 422. Every response
+    carries the educational disclaimer. Returns 503 if the trained model is not available
+    (not yet trained, or the training stack isn't installed).
     """
+    inputs = {}
+    if request.ecg:
+        inputs["ecg"] = request.ecg
+    if request.ppg:
+        inputs["ppg"] = request.ppg
+    if request.acc:
+        inputs["acc"] = request.acc
     try:
-        result = predict_ecg(request.ecg)
+        result = predict(inputs)
     except ModelUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
