@@ -6,24 +6,28 @@ Signal preprocessing and the modality-configurable PyTorch classifier for the
 Multimodal Biosignal Classifier (dataset: PPG-DaLiA — ECG + PPG + accelerometer).
 
 ## Status
-Phase 0 — package scaffolding. `config.py` is real (the modality/task config used by
-the tests); `datasets/`, `preprocessing.py`, `model.py`, and `train.py` are
-documented **stubs** that land in Phases 1–2 (see the root README roadmap).
+**Phase 1 — ECG-only, implemented.** The loader, preprocessing, 1-D CNN, and training
+CLI are real and produce an honest checkpoint + metrics. PPG/accelerometer fusion is
+Phase 2 (the architecture already supports it — just a longer `config.modalities`).
 
-## Install
+## Install & train
 ```bash
-pip install -e ".[dev]"      # base (numpy/pandas/scipy) + pytest
-pip install -e ".[train]"    # adds PyTorch — needed from Phase 1
+pip install -e ".[train,dev]"          # numpy/pandas/scipy + PyTorch + pytest
+python scripts/download_data.py        # PPG-DaLiA (~2.6 GB, CC BY 4.0) -> ./data
+python -m biosignal_model.train        # all 15 subjects, ~4.5 min on CPU (--smoke to spot-check)
 pytest
 ```
+Training writes `checkpoints/ecg_phase1.pt` (gitignored) and `metrics/phase1_ecg.json`.
+Test accuracy is **0.371** (8-class, subject-wise split) — see the root README's
+*Model metrics* for the honest read.
 
 ## Layout
 ```
 src/biosignal_model/
-  config.py          modality + task config (real)
-  datasets/          PPG-DaLiA loader (stub)
-  preprocessing.py   resample / window / normalize (stub)
-  model.py           1-D CNN encoders + fusion head (stub)
-  train.py           training entrypoint (stub)
-scripts/download_data.py   PPG-DaLiA fetch (documented; wired up Phase 1)
+  config.py          modality/task config + TrainConfig (real)
+  datasets/          PPG-DaLiA loader — ECG windows + activity labels
+  preprocessing.py   resample / window / normalize
+  model.py           modality-configurable 1-D CNN encoders + late-fusion head
+  train.py           training CLI (subject-wise split, honest metrics)
+scripts/download_data.py   PPG-DaLiA fetch + extract
 ```

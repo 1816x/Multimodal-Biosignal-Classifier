@@ -63,7 +63,7 @@ docs/        design decisions + architecture notes
 | Phase | Scope | Status |
 |------:|-------|--------|
 | 0 | Scaffolding: structure, README, disclaimer, design docs | ✅ done |
-| 1 | Minimal **ECG-only** model + prediction endpoint | ⬜ planned |
+| 1 | Minimal **ECG-only** model + prediction endpoint | ✅ done |
 | 2 | Add **PPG + accelerometer** (multimodal) + preprocessing tests | ⬜ planned |
 | 3 | **Claude API** explanation layer + prompt/disclaimer design | ⬜ planned |
 | 4 | **Next.js** dashboard | ⬜ planned |
@@ -74,25 +74,64 @@ docs/        design decisions + architecture notes
 Requires Python ≥ 3.10 and Node ≥ 20.
 
 ```bash
-# API service (health + info endpoints)
-pip install -e "api[dev]"
-uvicorn biosignal_api.main:app --reload    # http://127.0.0.1:8000  ->  / · /health · /docs
+# Model package (+ PyTorch for training, from Phase 1)
+pip install -e "model[train,dev]"
 
-# Model package (config + stubs now; add torch for training from Phase 1)
-pip install -e "model[dev]"                # base
-pip install -e "model[train]"              # + PyTorch, from Phase 1
+# 1. Fetch PPG-DaLiA (~2.6 GB, CC BY 4.0) into ./data — downloaded, never committed
+python model/scripts/download_data.py
+
+# 2. Train the Phase 1 ECG-only classifier (all 15 subjects; ~4.5 min on CPU)
+python -m biosignal_model.train              # --smoke for a fast pipeline check
+#   -> writes model/checkpoints/ecg_phase1.pt  and  model/metrics/phase1_ecg.json
+
+# 3. Serve it: health + info + POST /predict
+pip install -e "api[dev,predict]"
+uvicorn biosignal_api.main:app --reload      # http://127.0.0.1:8000  ->  / · /health · /predict · /docs
+
+# One ECG window (8 s @ 64 Hz = 512 samples) -> activity + confidence + disclaimer
+curl -s -X POST localhost:8000/predict -H 'content-type: application/json' \
+     -d "{\"ecg\": $(python -c 'import json;print(json.dumps([0.0]*512))')}"
 
 pytest model/ api/
 ```
 
-Copy `.env.example` to `.env` for the Claude API key (used from Phase 3).
+`POST /predict` returns **503** until the model is trained (checkpoint present), so
+health/info work standalone. Copy `.env.example` to `.env` to override `DATA_DIR` /
+`MODEL_CHECKPOINT` (and the Claude API key, used from Phase 3).
 
 ## Model metrics
 
-Not yet trained — the model lands in Phases 1–2. Metrics (accuracy, per-class
-precision / recall, confusion matrix) will be reported here **honestly**, including
-limitations, and will not be inflated. Per the project plan the tests cover the
-deterministic preprocessing; model quality is documented with metrics, not asserts.
+**Phase 1 — ECG-only, 8-class activity recognition on PPG-DaLiA.** Reported
+**honestly**, including limitations, and not inflated. Full numbers (per-class,
+confusion matrix, hyperparameters) live in
+[`model/metrics/phase1_ecg.json`](model/metrics/phase1_ecg.json); reproduce with
+`python -m biosignal_model.train`.
+
+- **Split is by subject** (train S1–S11, val S12–S13, **test S14–S15**) — no window
+  from a test subject is ever seen in training. This is the honest setup: PPG-DaLiA's
+  adjacent windows are highly correlated, so a random split would report a much
+  rosier (and misleading) number.
+- Chance for 8 balanced classes is 12.5%. Loss is class-weighted to counter the
+  strong activity imbalance (`lunch_break` alone is ~30% of windows).
+
+| Split | Accuracy | Macro F1 | Weighted F1 | n |
+|---|---|---|---|---|
+| Validation (S12–S13) | 0.466 | 0.495 | 0.465 | 6,334 |
+| **Test (held-out S14–S15)** | **0.371** | **0.385** | 0.371 | 6,134 |
+
+Per-class on the test set (F1): `cycling` 0.74, `stairs` 0.61, `sitting` 0.49,
+`lunch_break` 0.38, `driving` 0.30, `working` 0.28, `walking` 0.26, `table_soccer`
+0.03. A ~53k-parameter 1-D CNN, trained in ~4.5 min on CPU.
+
+**Honest read.** 0.371 test accuracy is roughly **3× chance** — the ECG genuinely
+carries an activity signal (exertion raises heart rate, so `cycling`/`stairs`
+separate well), but ECG alone can't see *motion*, so posture-similar classes
+(`table_soccer`, `working`, `walking`) blur together. The model also overfits the
+training subjects (best validation lands early, at epoch 2). This is exactly the
+ceiling Phase 2 is meant to lift: the wrist **accelerometer + PPG** observe movement
+directly, which is what these confusable classes need. Per the project plan the
+tests cover deterministic preprocessing; model quality is documented here with
+metrics, not asserts.
 
 ## Design decisions
 
