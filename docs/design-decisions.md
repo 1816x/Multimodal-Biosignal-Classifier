@@ -80,4 +80,51 @@ safer framing than implying stress or arrhythmia diagnosis.
 
 ---
 
-*Phases 1–5 will append their own decisions below as they are built.*
+## Phase 1 — ECG-only model, training, and the prediction endpoint
+
+Phase 1 turns the scaffold into a working slice: a real PPG-DaLiA loader, a 1-D CNN,
+an honest training run, and `POST /predict`. The modality-configurable design held up
+— selecting Phase 1 is still just `config.ECG_ONLY`, no `--phase` flag.
+
+### Accepted / built as designed
+- **Model is modality-configurable, not ECG-hardcoded.** `build_model` builds one
+  1-D CNN encoder *per* modality in `config.modalities` and late-fuses them; with one
+  modality that is a single encoder. Phase 2 adds PPG/ACC by extending the tuple —
+  no rewrite, as promised in Phase 0.
+- **Loader stays torch-free** (numpy/scipy only) and returns `(float32 (C, L), int)`,
+  so it plugs straight into a `DataLoader` while the base package still imports
+  without torch. Same dependency-light spirit as `config.py`.
+
+### Decided during Phase 1
+- **Resample ECG 700 Hz → 64 Hz.** `window_samples` is defined as
+  `window_seconds × target_hz` (512), and `target_hz = 64` is the shared fusion base
+  (PPG's native rate). So even ECG-only resamples onto it. **Honest caveat:** 64 Hz is
+  well below what ECG *morphology* (QRS shape) needs — but this is **activity
+  recognition**, not cardiology, and heart-rate dynamics survive downsampling fine.
+  Documented so nobody mistakes this for a cardiac-grade pipeline.
+- **Split by subject, not by window.** Train S1–S11, val S12–S13, test S14–S15. A
+  random window split would let near-duplicate neighbours straddle train/test and
+  inflate accuracy badly. Subject-wise is the honest generalization test, and the
+  reported 0.371 is what it costs to be honest.
+- **Class-weighted loss.** PPG-DaLiA activities are very imbalanced (`lunch_break`
+  ~30% of windows); inverse-frequency weighting keeps minority activities from being
+  ignored. Reported metrics are macro *and* weighted so the imbalance is visible.
+- **`relevant_segment` is deliberately crude.** It's the temporal arg-max of the last
+  conv feature map mapped back to input samples — a cheap localization hint, **not** a
+  calibrated attribution. Labelled as such in the code and the response.
+
+### What the first cut got wrong (the useful part)
+- **Expecting ECG-only to be "decent."** It isn't, and it shouldn't be: ECG cannot
+  observe *motion*. The confusion matrix is blunt about it — `cycling` and `stairs`
+  (big HR swings) score F1 0.74 / 0.61, while `table_soccer` collapses to 0.03 and
+  `walking`/`working` blur into `lunch_break`. That's not a bug to tune away; it's the
+  physiological ceiling of a single modality, and it is the concrete argument for why
+  Phase 2's accelerometer + PPG exist.
+- **Overfitting to subjects is real.** Best validation accuracy lands at *epoch 2*,
+  then train loss keeps falling while val doesn't — the net memorizes the 11 training
+  subjects. We keep the best-val checkpoint rather than the last one, and resisted the
+  temptation to inflate the number by tuning on the test subjects.
+
+---
+
+*Phases 2–5 will append their own decisions below as they are built.*

@@ -17,6 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]   # httpx backs FastAPI's TestClient
+# Phase 1 — serving the trained model. The sibling `biosignal-model` package must
+# also be installed (editable): `pip install -e model`. torch is loaded lazily so
+# the service (health/info) still runs without this extra.
+predict = ["torch>=2.2", "numpy>=1.26", "scipy>=1.11"]
 explain = ["anthropic>=0.40"]          # Phase 3 — Claude API explanation layer
 
 [tool.setuptools.packages.find]

@@ -66,3 +66,35 @@ class ModelConfig:
 # Phase 1 = ECG only; Phase 2 = full multimodal.
 ECG_ONLY = ModelConfig(modalities=(Modality.ECG,))
 MULTIMODAL = ModelConfig(modalities=(Modality.ECG, Modality.PPG, Modality.ACC))
+
+
+@dataclass(frozen=True)
+class TrainConfig:
+    """Phase 1 training hyperparameters and the subject-wise data split.
+
+    Kept pure-Python (no numpy/torch) alongside :class:`ModelConfig` so the config
+    stays inspectable without the training stack. The split is **by subject** —
+    windows from one subject never span train/val/test — which is the honest setup
+    for PPG-DaLiA (adjacent windows are highly correlated, so a random split would
+    inflate metrics). Defaults are tuned for CPU-only training on all 15 subjects.
+    """
+
+    # subject-wise split (PPG-DaLiA has subjects S1..S15)
+    train_subjects: tuple[int, ...] = tuple(range(1, 12))   # S1..S11
+    val_subjects: tuple[int, ...] = (12, 13)
+    test_subjects: tuple[int, ...] = (14, 15)
+
+    # windowing / optimization
+    stride_seconds: float = 2.0     # 8 s window, 2 s hop (75% overlap), matches DaLiA's 2 s label grid
+    epochs: int = 15
+    batch_size: int = 128
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
+    seed: int = 42
+
+    # artifacts (both gitignored — see .gitignore)
+    checkpoint_path: str = "model/checkpoints/ecg_phase1.pt"
+    metrics_path: str = "model/metrics/phase1_ecg.json"
+
+
+PHASE1_TRAIN = TrainConfig()
