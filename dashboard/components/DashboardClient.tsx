@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import InputControls from "@/components/InputControls";
+import ModelCardPanel from "@/components/ModelCardPanel";
 import PredictionCard from "@/components/PredictionCard";
 import ReportPanel from "@/components/ReportPanel";
 import SignalPanel from "@/components/SignalPanel";
@@ -190,8 +191,9 @@ export default function DashboardClient() {
         </p>
       </header>
 
-      <div className="mb-4">
+      <div className="mb-4 flex flex-col gap-3">
         <StatusBanner health={health} apiVersion={apiVersion} />
+        <ModelCardPanel />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
