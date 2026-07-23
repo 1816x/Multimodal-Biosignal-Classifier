@@ -240,4 +240,58 @@ plain-language, clinical-*style* report via the Claude API — "built visibly *w
 
 ---
 
-*Phases 4–5 will append their own decisions below as they are built.*
+## Phase 4 — Next.js dashboard
+
+Phase 4 adds the `dashboard/`: a Next.js 16 / React 19 app that plots an ECG + PPG +
+accelerometer window, shows the model's prediction with the relevant segment shaded
+across all three signals, and renders the Claude report — disclaimer prominent
+throughout. It consumes the Phase 1–3 API with **no changes to `api/`**.
+
+### Decided during Phase 4
+- **The browser talks to the API through a Next.js server-side proxy, not CORS.**
+  Route Handlers at `app/api/{health,predict,report}` forward to the FastAPI service;
+  the browser only ever calls this app's own origin. Adding `CORSMiddleware` to the
+  finished, merged `api/` was the obvious alternative and was rejected: it would mutate
+  a completed component and force an allowed-origins decision. The proxy keeps each
+  phase landing independently, holds the upstream URL server-side (`API_BASE_URL`,
+  deliberately **not** `NEXT_PUBLIC_`), and gives one seam to normalize errors — a
+  backend connection failure becomes the same **503** the UI already handles for an
+  untrained model.
+- **Demo mode is real but never dishonest.** A fresh clone has no trained checkpoint
+  and no dataset, so `/predict` and `/report` return 503 and there is no real window to
+  plot. The dashboard ships a few **synthetic** input windows and **canned** demo
+  results so the whole UI is viewable with `npm run dev` and no backend. The hard rule:
+  a live result is **never** silently replaced by a canned one — every synthetic or
+  canned piece is visibly badged and the reason for any fallback is shown. Inputs are
+  **synthetic, not dataset-extracted**, on purpose: the project never commits PPG-DaLiA
+  (CC BY 4.0, gitignored), and a real window fed to a 503 endpoint buys no real output
+  anyway.
+- **The disclaimer lives in two places, deliberately.** A global `DisclaimerBanner`
+  (mounted in the root layout) is always on and depends on no response — the Phase 0
+  hard requirement, now in the UI. Separately, `ReportPanel` surfaces the
+  response-carried disclaimer that the API prepends to every report. The UI copy mirrors
+  the API's canonical `DISCLAIMER`.
+- **Recharts for the plots.** 512-point line charts × 3 modalities plus a shaded
+  `ReferenceArea` for `[start, end]` — Recharts gives the overlay for free and reads as
+  idiomatic React. Charts render client-side only (past hydration, via a
+  `useSyncExternalStore`-based mounted flag) to avoid SSR size warnings and hydration
+  mismatches.
+- **Two actions, mirroring the API split.** Separate **Run prediction** (`/predict`) and
+  **Explain with Claude** (`/report`) buttons keep the fast classifier independent of the
+  opt-in, token-spending LLM call — the same separation Phase 3 chose for the endpoints.
+
+### Honest caveat carried forward
+- Uploaded windows are validated to the canonical **512-sample** (8 s @ 64 Hz) grid so
+  the plotted signal and the returned `relevant_segment` line up 1:1. Differently-sized
+  windows (which the API would resample internally) are out of scope for the overlay and
+  are rejected client-side with a clear message, rather than silently mis-aligning.
+
+### Deferred to Phase 5
+- A **CI workflow** gating `model` + `api` + `dashboard` together (the repo has no
+  `.github/` yet); Phase 4 ships the npm scripts (`lint`, `typecheck`, `build`, `test`)
+  it will call. Also deferred: deployment, real dataset-extracted samples behind a local
+  script, and a model-card panel surfacing the honest metrics.
+
+---
+
+*Phase 5 will append its decisions below as it is built.*

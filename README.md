@@ -54,7 +54,7 @@ cannot support a genuine multimodal model on its own. Full rationale in
 ```
 model/       Python — signal preprocessing + PyTorch model
 api/         Python — FastAPI service (health/info + multimodal POST /predict + Claude report POST /report)
-dashboard/   TypeScript / Next.js — visualization (Phase 4)
+dashboard/   TypeScript / Next.js — dashboard: signal plots + prediction + report (Phase 4)
 docs/        design decisions + architecture notes
 ```
 
@@ -66,7 +66,7 @@ docs/        design decisions + architecture notes
 | 1 | Minimal **ECG-only** model + prediction endpoint | ✅ done |
 | 2 | Add **PPG + accelerometer** (multimodal) + preprocessing tests | ✅ done |
 | 3 | **Claude API** explanation layer + prompt/disclaimer design | ✅ done |
-| 4 | **Next.js** dashboard | ⬜ planned |
+| 4 | **Next.js** dashboard | ✅ done |
 | 5 | `v0.1.0` release + honest metrics (incl. limitations) | ⬜ planned |
 
 ## Quickstart (development)
@@ -97,6 +97,11 @@ curl -s -X POST localhost:8000/report -H 'content-type: application/json' \
      -d "$(python -c 'import json;print(json.dumps({"ecg":[0.0]*512,"ppg":[0.0]*512,"acc":[[0.0,0.0,0.0]]*512}))')"
 
 pytest model/ api/
+
+# 4. Dashboard (Phase 4): visualize the window + prediction + report (Next.js)
+cd dashboard && npm install && npm run dev   # http://localhost:3000
+#   Runs with NO backend using badged synthetic/demo data; to use the live API set
+#   API_BASE_URL in dashboard/.env.local (defaults to http://127.0.0.1:8000).
 ```
 
 `POST /predict` returns **503** until the model is trained (checkpoint present), so
