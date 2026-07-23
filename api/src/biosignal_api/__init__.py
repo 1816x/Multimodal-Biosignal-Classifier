@@ -2,7 +2,7 @@
 
 Educational prototype — NOT an approved medical or diagnostic tool.
 """
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 # Canonical educational disclaimer. Lives here (not in main.py) so both the API
 # routes and the Claude explanation layer can import it without a circular import,
