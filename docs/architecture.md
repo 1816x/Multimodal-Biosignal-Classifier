@@ -33,7 +33,11 @@ serves prediction     -->    Claude API -> clinical-style report
 - **`api/`** (Python, FastAPI) — the service. Phase 0 exposes `GET /health` and
   `GET /` (info + disclaimer); `POST /predict` and the report endpoint arrive with
   Phases 1–3. Pydantic v2 schemas live in `schemas.py`.
-- **`dashboard/`** (TypeScript, Next.js) — visualization, built in Phase 4.
+- **`dashboard/`** (TypeScript, Next.js) — visualization: signal plots, the
+  prediction (class + confidence + shaded relevant segment), and the Claude
+  report, with the educational disclaimer always visible. Talks to the API through
+  a server-side proxy (`app/api/*`), so the browser stays same-origin and the
+  Python service needs no CORS. Built in Phase 4.
 
 ## Modality configuration
 
