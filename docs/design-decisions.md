@@ -127,4 +127,70 @@ an honest training run, and `POST /predict`. The modality-configurable design he
 
 ---
 
-*Phases 2–5 will append their own decisions below as they are built.*
+## Phase 2 — Multimodal fusion (ECG + PPG + accelerometer)
+
+Phase 2 makes the model actually multimodal: the loader now reads all three signals,
+resamples them onto a shared clock, aligns and windows them together, and the training
+and serving paths fuse them. The Phase 0 promise ("no rewrite, just a longer
+`modalities` tuple") held for the *model* — but not for the data path.
+
+### What the closing note of Phase 1 got wrong (the useful part)
+- The hand-off said Phase 2 was "just extend `config.MULTIMODAL` with PPG +
+  accelerometer." That undersold it. The **config layer was already done** — the
+  `Modality` enum, `NATIVE_SAMPLE_RATES_HZ`, `CHANNELS_PER_MODALITY` and the
+  `MULTIMODAL` preset all listed PPG/ACC since Phase 0. The real Phase 2 work was the
+  **implementation** those names had been standing in for: the loader was hard ECG-only
+  with an explicit guard that *raised* on anything else, and training/serving were
+  wired to `ECG_ONLY`. Recording this because "the config already says it" is exactly
+  the kind of thing that reads as done when it isn't.
+
+### Decided during Phase 2
+- **Accelerometer as 3 axes, not a scalar magnitude.** The scaffold had provisionally
+  modeled ACC as 1-channel magnitude (`CHANNELS_PER_MODALITY["acc"] = 1`). Phase 2
+  changed it to the native **tri-axial** signal (`= 3`). Directional motion is the
+  whole reason the accelerometer is here — it is what separates `walking` / `stairs` /
+  `cycling`, the exact classes ECG alone blurred — and 3 axes is the form the dataset
+  and the reference paper (Reiss et al.) use. Magnitude is orientation-invariant, which
+  is a real robustness argument, but the Empatica E4 is worn consistently in PPG-DaLiA,
+  and magnitude is trivially derivable from the axes later if we want that ablation.
+  The API `acc` field is a list of `[x, y, z]` samples accordingly.
+- **Cross-device alignment by truncation to a common length.** Each modality is
+  resampled per channel to `target_hz` (64 Hz: ECG 700→64 down, PPG 64→64 no-op, ACC
+  32→64 up), then all modalities are truncated to the shortest resampled length so their
+  windows line up 1:1 on the shared time base. Labels come from the 4 Hz `activity`
+  track (the protocol clock all devices share). **Honest caveat:** this is simple
+  truncation alignment, not sub-sample cross-correlation — adequate because PPG-DaLiA is
+  already protocol-synchronized, but noted so nobody mistakes it for fine device
+  time-sync.
+- **Per-modality normalization.** Z-score stats are fit per modality (and per ACC axis),
+  on the TRAIN split only, and stored per-modality in the checkpoint. A single global
+  mean/std would be wrong across signals with completely different units and scales.
+- **A `--phase` flag after all.** Phase 1's note said modality was "selected by config
+  preset (not a flag)." Phase 2 adds `--phase {1,2}` (default 2) so the ECG-only
+  baseline stays reproducible while multimodal becomes the default run. A modest,
+  deliberate reversal of that earlier stance now that two presets actually coexist.
+- **One sample path for both presets.** The dataset now always returns a
+  `{modality: (channels, window)}` dict — even ECG-only — so training and serving have a
+  single code path (`MultimodalClassifier.forward` already accepted a dict). The
+  ECG-only numbers are unchanged: it is the same resample/window/label logic with one
+  modality.
+
+### Accepted / held up from earlier phases
+- **The modality-configurable model needed no structural change.** `build_model` still
+  builds one encoder per `config.modalities` entry and late-fuses; the only model edit
+  was the ACC channel count. Serving rebuilds the architecture straight from the
+  checkpoint's `modalities` list, so the same route serves an ECG-only or a full
+  multimodal checkpoint.
+- **Preprocessing stayed generic.** `resample_to_common_rate` / `window_signal` /
+  `compute_norm_stats` / `normalize` were already modality-agnostic and per-channel, so
+  Phase 2 reused them as-is; the new tests cover the multi-rate and multi-channel paths.
+
+### Results (honest, as ever)
+- Multimodal metrics are reported the same way as Phase 1 — subject-wise split, not
+  inflated — in [`model/metrics/phase2_multimodal.json`](../model/metrics/phase2_multimodal.json)
+  and summarized in the README metrics table alongside the ECG-only baseline, so the
+  lift (or lack of it) from adding motion is visible rather than asserted.
+
+---
+
+*Phases 3–5 will append their own decisions below as they are built.*

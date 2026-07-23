@@ -1,7 +1,7 @@
-"""Phase 0 smoke tests: the package imports and its config is coherent.
+"""Smoke tests: the package imports and its config is coherent.
 
-Real preprocessing tests arrive in Phase 2; the model itself is evaluated with
-documented metrics, not asserts (see the project spec).
+Preprocessing, dataset and model behavior are covered in their own test modules; the
+model itself is evaluated with documented metrics, not asserts (see the project spec).
 """
 from biosignal_model import __version__, config
 

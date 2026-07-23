@@ -92,9 +92,16 @@ class TrainConfig:
     weight_decay: float = 1e-4
     seed: int = 42
 
-    # artifacts (both gitignored — see .gitignore)
+    # artifacts (checkpoint gitignored; metrics JSON is committed as the honest record)
     checkpoint_path: str = "model/checkpoints/ecg_phase1.pt"
     metrics_path: str = "model/metrics/phase1_ecg.json"
 
 
 PHASE1_TRAIN = TrainConfig()
+
+# Phase 2 reuses the same subject-wise split and hyperparameters as Phase 1 (so the
+# multimodal result is comparable), only redirecting the output artifacts.
+PHASE2_TRAIN = TrainConfig(
+    checkpoint_path="model/checkpoints/multimodal_phase2.pt",
+    metrics_path="model/metrics/phase2_multimodal.json",
+)

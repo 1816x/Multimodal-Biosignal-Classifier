@@ -1,11 +1,13 @@
 """Training entrypoint for the multimodal biosignal classifier.
 
-Phase 1: train ECG-only on PPG-DaLiA (subject-wise split) and report honest metrics
-(accuracy, per-class precision/recall/F1, confusion matrix). Phase 2 extends this to
-full multimodal training. Metrics are documented, not asserted.
+Trains on PPG-DaLiA (subject-wise split) and reports honest metrics (accuracy,
+per-class precision/recall/F1, confusion matrix). ``--phase`` selects the modality
+preset: phase 1 is ECG-only, phase 2 is the full multimodal model (ECG + PPG +
+accelerometer). Metrics are documented, not asserted.
 
 Usage:
-    python -m biosignal_model.train                 # full run, all 15 subjects
+    python -m biosignal_model.train                  # phase 2 (multimodal), all 15 subjects
+    python -m biosignal_model.train --phase 1        # reproduce the ECG-only baseline
     python -m biosignal_model.train --smoke          # fast end-to-end check (few subjects)
     python -m biosignal_model.train --epochs 20 --lr 5e-4
 
@@ -40,7 +42,11 @@ def _build_dataset(data_dir, subjects, model_cfg, stride_seconds):
 
 
 def build_splits(data_dir, model_cfg, train_cfg):
-    """Load train/val/test (subject-wise) and z-score all three with train-fit stats."""
+    """Load train/val/test (subject-wise) and z-score all three with train-fit stats.
+
+    Normalization stats are per-modality (``{modality: (mean, std)}``), fit on the
+    TRAIN split only so no test/val statistics leak into training.
+    """
     print(f"Loading train subjects {list(train_cfg.train_subjects)} …", flush=True)
     train = _build_dataset(data_dir, train_cfg.train_subjects, model_cfg, train_cfg.stride_seconds)
     print(f"Loading val subjects {list(train_cfg.val_subjects)} …", flush=True)
@@ -48,11 +54,11 @@ def build_splits(data_dir, model_cfg, train_cfg):
     print(f"Loading test subjects {list(train_cfg.test_subjects)} …", flush=True)
     test = _build_dataset(data_dir, train_cfg.test_subjects, model_cfg, train_cfg.stride_seconds)
 
-    mean, std = train.fit_norm_stats()  # fit on TRAIN only — no leakage
+    norm_stats = train.fit_norm_stats()  # fit on TRAIN only — no leakage
     for ds in (train, val, test):
-        ds.apply_norm(mean, std)
+        ds.apply_norm(norm_stats)
     print(f"windows — train {len(train)}, val {len(val)}, test {len(test)}", flush=True)
-    return train, val, test, mean, std
+    return train, val, test, norm_stats
 
 
 def class_weights(labels, num_classes):
@@ -167,8 +173,9 @@ def train_model(model, train_ds, val_ds, train_cfg, class_names):
             loss = criterion(model(x), y)
             loss.backward()
             optimizer.step()
-            running += loss.item() * x.shape[0]
-            n += x.shape[0]
+            bs = y.shape[0]  # x is a {modality: tensor} dict, so count from the labels
+            running += loss.item() * bs
+            n += bs
         targets, preds = evaluate(model, val_loader)
         val_acc = float((targets == preds).mean())
         print(f"epoch {epoch:2d}/{train_cfg.epochs}  train_loss={running/n:.4f}  "
@@ -184,6 +191,11 @@ def train_model(model, train_ds, val_ds, train_cfg, class_names):
 
 
 # ----------------------------------------------------------------------------- CLI
+def _subject_list(s: str) -> tuple[int, ...]:
+    """Parse a comma-separated subject list like ``1,2,3`` into ``(1, 2, 3)``."""
+    return tuple(int(x) for x in s.split(",") if x.strip())
+
+
 def _apply_smoke(train_cfg):
     """Fast end-to-end validation: few subjects, few epochs (not a real result)."""
     from dataclasses import replace
@@ -192,38 +204,51 @@ def _apply_smoke(train_cfg):
 
 
 def main() -> None:
-    base = cfg.PHASE1_TRAIN
-    parser = argparse.ArgumentParser(description="Train the Phase 1 ECG-only activity classifier.")
+    defaults = cfg.PHASE1_TRAIN  # phase 1 and 2 share hyperparameters; only artifacts differ
+    parser = argparse.ArgumentParser(description="Train the PPG-DaLiA activity classifier.")
+    parser.add_argument("--phase", type=int, default=2, choices=(1, 2),
+                        help="1 = ECG-only baseline; 2 = multimodal ECG+PPG+ACC (default)")
     parser.add_argument("--data-dir", default="data", help="DATA_DIR with PPG_FieldStudy/ (default: data)")
-    parser.add_argument("--epochs", type=int, default=base.epochs)
-    parser.add_argument("--batch-size", type=int, default=base.batch_size)
-    parser.add_argument("--lr", type=float, default=base.learning_rate)
-    parser.add_argument("--weight-decay", type=float, default=base.weight_decay)
-    parser.add_argument("--stride-seconds", type=float, default=base.stride_seconds)
-    parser.add_argument("--seed", type=int, default=base.seed)
-    parser.add_argument("--out", default=base.checkpoint_path, help="checkpoint output path")
-    parser.add_argument("--metrics", default=base.metrics_path, help="metrics JSON output path")
+    parser.add_argument("--epochs", type=int, default=defaults.epochs)
+    parser.add_argument("--batch-size", type=int, default=defaults.batch_size)
+    parser.add_argument("--lr", type=float, default=defaults.learning_rate)
+    parser.add_argument("--weight-decay", type=float, default=defaults.weight_decay)
+    parser.add_argument("--stride-seconds", type=float, default=defaults.stride_seconds)
+    parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--out", default=None, help="checkpoint output path (default: per-phase preset)")
+    parser.add_argument("--metrics", default=None, help="metrics JSON output path (default: per-phase preset)")
+    parser.add_argument("--train-subjects", type=_subject_list, default=None,
+                        help="override subject-wise split, e.g. 1,2,3 (default: preset)")
+    parser.add_argument("--val-subjects", type=_subject_list, default=None, help="override val subjects")
+    parser.add_argument("--test-subjects", type=_subject_list, default=None, help="override test subjects")
     parser.add_argument("--smoke", action="store_true", help="fast pipeline check on a few subjects")
     args = parser.parse_args()
+
+    # Select the modality preset and matching artifact paths from --phase.
+    base, model_cfg = (cfg.PHASE2_TRAIN, cfg.MULTIMODAL) if args.phase == 2 else (cfg.PHASE1_TRAIN, cfg.ECG_ONLY)
 
     from dataclasses import replace
     train_cfg = replace(
         base, epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.lr,
         weight_decay=args.weight_decay, stride_seconds=args.stride_seconds, seed=args.seed,
-        checkpoint_path=args.out, metrics_path=args.metrics,
+        checkpoint_path=args.out or base.checkpoint_path, metrics_path=args.metrics or base.metrics_path,
+        train_subjects=args.train_subjects or base.train_subjects,
+        val_subjects=args.val_subjects or base.val_subjects,
+        test_subjects=args.test_subjects or base.test_subjects,
     )
     if args.smoke:
         train_cfg = _apply_smoke(train_cfg)
         print("[smoke] tiny subset / 2 epochs — NOT a reportable result")
 
-    model_cfg = cfg.ECG_ONLY  # Phase 1 = ECG-only, selected by config preset (not a flag)
+    modality_str = "+".join(m.value for m in model_cfg.modalities)
+    print(f"Phase {args.phase} — modalities: {modality_str}")
     set_seed(train_cfg.seed)
 
     import torch
     torch.manual_seed(train_cfg.seed)
 
     t_start = time.time()
-    train_ds, val_ds, test_ds, mean, std = build_splits(args.data_dir, model_cfg, train_cfg)
+    train_ds, val_ds, test_ds, norm_stats = build_splits(args.data_dir, model_cfg, train_cfg)
     print("train class distribution:", train_ds.class_distribution())
 
     model = build_model(model_cfg)
@@ -250,7 +275,8 @@ def main() -> None:
             "modalities": [m.value for m in model_cfg.modalities],
             "window_samples": model_cfg.window_samples,
             "target_hz": model_cfg.target_hz,
-            "norm_mean": mean, "norm_std": std,
+            # per-modality z-score stats: {modality: {"mean": (C,1), "std": (C,1)}}
+            "norm_stats": {k: {"mean": mn, "std": sd} for k, (mn, sd) in norm_stats.items()},
             "test_metrics": test_report,
         },
         ckpt_path,
@@ -261,8 +287,8 @@ def main() -> None:
     metrics_path = Path(train_cfg.metrics_path)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     summary = {
-        "phase": 1,
-        "task": "PPG-DaLiA activity recognition (ECG-only)",
+        "phase": args.phase,
+        "task": f"PPG-DaLiA activity recognition ({modality_str})",
         "note": "Educational prototype — NOT a medical device. Subject-wise split; metrics not inflated.",
         "modalities": [m.value for m in model_cfg.modalities],
         "target_hz": model_cfg.target_hz,

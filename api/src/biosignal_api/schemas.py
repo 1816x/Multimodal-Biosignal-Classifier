@@ -26,14 +26,19 @@ class ServiceInfo(BaseModel):
 
 
 class PredictionRequest(BaseModel):
-    """Forward-declared prediction input (implemented Phase 1+).
+    """Prediction input: one window of raw samples per modality.
 
-    One window of raw samples per modality. PPG/ACC are unused until Phase 2.
+    The model consumes whatever modalities its checkpoint was trained on (ECG-only for a
+    Phase 1 checkpoint; ECG + PPG + accelerometer for Phase 2). ECG and PPG are flat
+    sample lists; the accelerometer is a list of ``[x, y, z]`` samples (3 axes).
     """
 
     ecg: list[float] = Field(default_factory=list, description="ECG samples for one window")
-    ppg: list[float] = Field(default_factory=list, description="PPG samples (Phase 2)")
-    acc: list[float] = Field(default_factory=list, description="Accelerometer magnitude (Phase 2)")
+    ppg: list[float] = Field(default_factory=list, description="PPG (BVP) samples for one window")
+    acc: list[list[float]] = Field(
+        default_factory=list,
+        description="Accelerometer samples for one window, each a [x, y, z] triple",
+    )
 
 
 class PredictionResponse(BaseModel):

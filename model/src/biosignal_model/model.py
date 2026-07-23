@@ -12,8 +12,10 @@ Educational prototype — NOT a medical device.
 """
 from __future__ import annotations
 
-# One ECG channel in Phase 1; PPG is 1 (BVP) and ACC is 1 (magnitude) in Phase 2.
-CHANNELS_PER_MODALITY: dict[str, int] = {"ecg": 1, "ppg": 1, "acc": 1}
+# Input channels per modality: ECG 1, PPG 1 (BVP), ACC 3 (tri-axial x/y/z). Phase 2
+# feeds the accelerometer as 3 axes (not a scalar magnitude) so the model keeps the
+# directional motion cues that separate walking / stairs / cycling.
+CHANNELS_PER_MODALITY: dict[str, int] = {"ecg": 1, "ppg": 1, "acc": 3}
 
 _CLASSES = None  # cache so the lazily-built nn.Module subclasses are defined once
 

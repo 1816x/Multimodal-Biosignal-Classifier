@@ -1,12 +1,17 @@
-"""Phase 1 prediction: load the trained ECG model and classify one window.
+"""Prediction: load the trained model and classify one multimodal window.
 
 Everything heavy (torch, numpy, the ``biosignal_model`` package, the checkpoint) is
 imported/loaded lazily and cached, so the FastAPI app still starts and serves
 health/info without the training stack. If the model can't be loaded, callers get
 :class:`ModelUnavailable`, which the route turns into a clean HTTP 503.
 
+The model is modality-configurable: it serves whatever modalities the checkpoint was
+trained on (``ckpt["modalities"]`` — ECG-only for a Phase 1 checkpoint, ECG + PPG +
+accelerometer for Phase 2). Each provided modality is resampled to the model's window
+length and z-scored with the per-modality stats stored in the checkpoint.
+
 The checkpoint path comes from ``MODEL_CHECKPOINT`` (see .env.example), defaulting to
-``model/checkpoints/ecg_phase1.pt`` produced by ``python -m biosignal_model.train``.
+``model/checkpoints/multimodal_phase2.pt`` produced by ``python -m biosignal_model.train``.
 
 Educational prototype — NOT a medical device.
 """
@@ -15,7 +20,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_CHECKPOINT = "model/checkpoints/ecg_phase1.pt"
+DEFAULT_CHECKPOINT = "model/checkpoints/multimodal_phase2.pt"
 _EPS = 1e-8
 _STATE = None  # cache: (model, checkpoint_dict)
 
@@ -29,7 +34,11 @@ def _checkpoint_path() -> Path:
 
 
 def load_predictor():
-    """Load and cache ``(model, checkpoint)``. Raises :class:`ModelUnavailable` on failure."""
+    """Load and cache ``(model, checkpoint)``. Raises :class:`ModelUnavailable` on failure.
+
+    The model architecture is rebuilt from the checkpoint's ``modalities`` list, so the
+    same code serves an ECG-only or a full multimodal checkpoint.
+    """
     global _STATE
     if _STATE is not None:
         return _STATE
@@ -52,7 +61,8 @@ def load_predictor():
         )
 
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    model = build_model(config.ECG_ONLY)
+    modalities = tuple(config.Modality(m) for m in ckpt["modalities"])
+    model = build_model(config.ModelConfig(modalities=modalities))
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
     _STATE = (model, ckpt)
@@ -67,37 +77,73 @@ def is_available() -> bool:
         return False
 
 
-def predict_ecg(ecg: list[float]) -> dict:
-    """Classify one ECG window into a PPG-DaLiA activity.
+def required_modalities() -> list[str]:
+    """The modalities this checkpoint expects in a prediction request."""
+    _, ckpt = load_predictor()
+    return list(ckpt["modalities"])
 
-    ``ecg`` is one window of raw samples. The model expects ``window_samples`` at the
-    model's ``target_hz`` (64 Hz); a differing length is resampled to fit and the
-    stored train-split normalization is applied. Returns ``predicted_class`` /
-    ``confidence`` (softmax max) / ``relevant_segment`` ([start, end] input indices).
+
+def _to_channels(raw, n_channels: int, modality: str):
+    """Coerce one modality's raw samples into a ``(n_channels, n_samples)`` array.
+
+    1-channel modalities (ECG, PPG) accept a flat list; the 3-axis accelerometer accepts
+    a list of ``[x, y, z]`` samples (shape ``(n, 3)``) — either axis order is tolerated.
+    """
+    import numpy as np
+
+    arr = np.asarray(raw, dtype=np.float64)
+    if arr.size == 0:
+        raise ValueError(f"modality '{modality}' window is empty")
+    if n_channels == 1:
+        return arr.reshape(1, -1)
+    if arr.ndim != 2:
+        raise ValueError(
+            f"modality '{modality}' expects {n_channels} channels as a list of samples, "
+            f"got a {arr.ndim}-D array"
+        )
+    if arr.shape[1] == n_channels:  # (n_samples, n_channels) -> (n_channels, n_samples)
+        arr = arr.T
+    elif arr.shape[0] != n_channels:
+        raise ValueError(f"modality '{modality}' expects {n_channels} channels, got shape {arr.shape}")
+    return arr
+
+
+def predict(inputs: dict) -> dict:
+    """Classify one multimodal window into a PPG-DaLiA activity.
+
+    ``inputs`` maps each modality name to one window of raw samples (ECG/PPG as a flat
+    list, ACC as a list of ``[x, y, z]`` samples). Every modality the checkpoint was
+    trained on must be present and non-empty. Each is resampled to the model's
+    ``window_samples`` at ``target_hz`` and z-scored with the stored per-modality stats.
+    Returns ``predicted_class`` / ``confidence`` (softmax max) / ``relevant_segment``.
     """
     import numpy as np
     import torch
     from scipy.signal import resample
 
     model, ckpt = load_predictor()
-    x = np.asarray(ecg, dtype=np.float64).reshape(-1)
-    if x.size == 0:
-        raise ValueError("ecg window is empty")
-
     win = int(ckpt["window_samples"])
-    if x.size != win:
-        x = resample(x, win)  # length-based resample to the model's window length
+    norm_stats = ckpt["norm_stats"]
 
-    mean = np.asarray(ckpt["norm_mean"], dtype=np.float32)  # (1, 1)
-    std = np.asarray(ckpt["norm_std"], dtype=np.float32)
-    xn = (x.reshape(1, -1).astype(np.float32) - mean) / (std + _EPS)  # (1, win)
-    t = torch.from_numpy(np.ascontiguousarray(xn)).unsqueeze(0)       # (1, 1, win)
+    tensors: dict[str, "torch.Tensor"] = {}
+    for m in ckpt["modalities"]:
+        raw = inputs.get(m)
+        if raw is None or len(raw) == 0:
+            raise ValueError(f"missing required modality '{m}' for this model")
+        mean = np.asarray(norm_stats[m]["mean"], dtype=np.float32)  # (channels, 1)
+        std = np.asarray(norm_stats[m]["std"], dtype=np.float32)
+        n_channels = mean.shape[0]
+        arr = _to_channels(raw, n_channels, m)  # (channels, n_samples)
+        if arr.shape[1] != win:  # length-based resample to the model's window length
+            arr = np.stack([resample(arr[c], win) for c in range(n_channels)], axis=0)
+        xn = (arr.astype(np.float32) - mean) / (std + _EPS)  # (channels, win)
+        tensors[m] = torch.from_numpy(np.ascontiguousarray(xn)).unsqueeze(0)  # (1, channels, win)
 
     with torch.no_grad():
-        probs = torch.softmax(model(t), dim=1)[0]
+        probs = torch.softmax(model(tensors), dim=1)[0]
         idx = int(probs.argmax())
         confidence = float(probs[idx])
-    start, end = model.relevant_segment(t, win)
+    start, end = model.relevant_segment(tensors, win)
 
     return {
         "predicted_class": ckpt["class_names"][idx],
