@@ -193,4 +193,51 @@ and serving paths fuse them. The Phase 0 promise ("no rewrite, just a longer
 
 ---
 
-*Phases 3–5 will append their own decisions below as they are built.*
+## Phase 3 — Claude API explanation layer
+
+Phase 3 delivers the project's differentiating angle: an **LLM explanation layer** that
+turns the model's numeric output (activity + confidence + relevant segment) into a
+plain-language, clinical-*style* report via the Claude API — "built visibly *with* AI."
+
+### Decided during Phase 3
+- **A separate `POST /report` endpoint**, not a flag on `/predict`. `/report` takes the
+  same window input, runs the prediction, then generates the report — mirroring the
+  architecture flowchart (prediction → report) and keeping `/predict` a pure, fast
+  classifier with no LLM dependency or latency. Extending `/predict` with an
+  `explain: true` flag was considered and rejected: it would mix two concerns and make
+  every prediction response's shape conditional.
+- **The disclaimer is prepended deterministically**, not left to the model.
+  `generate_report` returns `f"{DISCLAIMER}\n\n{body}"`, so the not-a-medical-tool
+  warning is *guaranteed* present even if the model omits it — the Phase 0 promise that
+  the disclaimer "travels with the output" is enforced in code, not prompt-hoped. The
+  system prompt also instructs the model to stay educational and never give medical
+  advice, as defense in depth.
+- **The disclaimer moved to a canonical home** (`biosignal_api/__init__.py`). Both
+  `main.py` (responses) and `explain.py` (report prefix) need the exact same text;
+  `explain` can't import it from `main` (circular — `main` imports `explain` for the
+  route), so it lives in the package `__init__` and both import `from . import DISCLAIMER`.
+  Existing `from biosignal_api.main import DISCLAIMER` imports still resolve via re-export.
+- **One `_complete` network seam for testability.** Importing `anthropic`, constructing
+  the client, and calling the Messages API all live in `explain._complete`. The report
+  tests monkeypatch that seam (happy path) or delete `ANTHROPIC_API_KEY` (unavailable
+  path), so the whole Phase 3 test suite runs with **no network and without `anthropic`
+  installed** — the same "green in CI without the heavy stack" discipline as the Phase 1/2
+  torch-optional prediction tests.
+- **Error mapping mirrors the prediction path.** Missing package / missing API key →
+  `ExplanationUnavailable` → **503** (same spirit as `ModelUnavailable`); an upstream
+  Claude API failure → `ExplanationError` → **502** (bad gateway). So `/report` degrades
+  cleanly with a clear message when unconfigured, exactly as `/predict` does without a
+  checkpoint.
+- **Model default = `claude-sonnet-5`**, read from `ANTHROPIC_MODEL` (already reserved in
+  `.env.example` since Phase 0). Sonnet is the right cost/quality point for short
+  educational report generation; the env var lets a deployer swap it without a code change.
+
+### Honest caveat carried forward
+- The report is generated from the numeric prediction alone (class + confidence +
+  segment), not from the raw signal — it explains *what the model concluded*, in plain
+  language, and cannot add clinical insight the model never had. That is deliberate for an
+  educational prototype, and the disclaimer says so on every report.
+
+---
+
+*Phases 4–5 will append their own decisions below as they are built.*
