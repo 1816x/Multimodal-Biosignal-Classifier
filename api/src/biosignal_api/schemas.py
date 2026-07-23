@@ -51,3 +51,16 @@ class PredictionResponse(BaseModel):
         description="[start, end] sample indices the model attended to",
     )
     disclaimer: str
+
+
+class ReportResponse(PredictionResponse):
+    """Prediction plus a Claude-generated natural-language report (Phase 3, POST /report).
+
+    Reuses the prediction fields and adds the report text, which is always prefixed
+    with the educational disclaimer.
+    """
+
+    report: str = Field(
+        ...,
+        description="Claude-generated natural-language report (disclaimer-prefixed)",
+    )

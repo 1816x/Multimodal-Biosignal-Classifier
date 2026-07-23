@@ -53,7 +53,7 @@ cannot support a genuine multimodal model on its own. Full rationale in
 
 ```
 model/       Python — signal preprocessing + PyTorch model
-api/         Python — FastAPI service (health/info + multimodal POST /predict; report later)
+api/         Python — FastAPI service (health/info + multimodal POST /predict + Claude report POST /report)
 dashboard/   TypeScript / Next.js — visualization (Phase 4)
 docs/        design decisions + architecture notes
 ```
@@ -65,7 +65,7 @@ docs/        design decisions + architecture notes
 | 0 | Scaffolding: structure, README, disclaimer, design docs | ✅ done |
 | 1 | Minimal **ECG-only** model + prediction endpoint | ✅ done |
 | 2 | Add **PPG + accelerometer** (multimodal) + preprocessing tests | ✅ done |
-| 3 | **Claude API** explanation layer + prompt/disclaimer design | ⬜ planned |
+| 3 | **Claude API** explanation layer + prompt/disclaimer design | ✅ done |
 | 4 | **Next.js** dashboard | ⬜ planned |
 | 5 | `v0.1.0` release + honest metrics (incl. limitations) | ⬜ planned |
 
@@ -84,20 +84,26 @@ python model/scripts/download_data.py
 python -m biosignal_model.train              # phase 2 (multimodal); --phase 1 = ECG-only baseline, --smoke = fast check
 #   -> writes model/checkpoints/multimodal_phase2.pt  and  model/metrics/phase2_multimodal.json
 
-# 3. Serve it: health + info + POST /predict
-pip install -e "api[dev,predict]"
-uvicorn biosignal_api.main:app --reload      # http://127.0.0.1:8000  ->  / · /health · /predict · /docs
+# 3. Serve it: health + info + POST /predict + POST /report
+pip install -e "api[dev,predict,explain]"    # explain adds the Claude SDK for /report
+uvicorn biosignal_api.main:app --reload      # http://127.0.0.1:8000  ->  / · /health · /predict · /report · /docs
 
 # One 8 s window per modality (ECG/PPG = 512 samples; ACC = 512 [x,y,z] triples) -> activity + confidence + disclaimer
 curl -s -X POST localhost:8000/predict -H 'content-type: application/json' \
+     -d "$(python -c 'import json;print(json.dumps({"ecg":[0.0]*512,"ppg":[0.0]*512,"acc":[[0.0,0.0,0.0]]*512}))')"
+
+# Same input to /report also returns a Claude-generated natural-language report (needs ANTHROPIC_API_KEY)
+curl -s -X POST localhost:8000/report -H 'content-type: application/json' \
      -d "$(python -c 'import json;print(json.dumps({"ecg":[0.0]*512,"ppg":[0.0]*512,"acc":[[0.0,0.0,0.0]]*512}))')"
 
 pytest model/ api/
 ```
 
 `POST /predict` returns **503** until the model is trained (checkpoint present), so
-health/info work standalone. Copy `.env.example` to `.env` to override `DATA_DIR` /
-`MODEL_CHECKPOINT` (and the Claude API key, used from Phase 3).
+health/info work standalone. `POST /report` additionally needs the report layer
+configured — set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`) in `.env`, else
+it returns **503** too. Copy `.env.example` to `.env` to override `DATA_DIR` /
+`MODEL_CHECKPOINT` and set the Claude API key.
 
 ## Model metrics
 
