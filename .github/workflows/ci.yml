@@ -1,0 +1,61 @@
+name: CI
+
+# Educational prototype — NOT a medical device.
+# Gates the three packages: model (PyTorch), api (FastAPI), dashboard (Next.js).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: python (${{ matrix.tier }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # light: torch-free — proves the suites are green without the heavy stack
+        #        (test_model / test_predict self-skip via pytest.importorskip).
+        # full:  installs CPU torch to exercise the model + predict-503 paths.
+        tier: [light, full]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            model/pyproject.toml
+            api/pyproject.toml
+      - name: Install (light — no torch)
+        if: matrix.tier == 'light'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./model[dev]" -e "./api[dev]"
+      - name: Install (full — CPU torch)
+        if: matrix.tier == 'full'
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e "./model[train,dev]" -e "./api[dev,predict]"
+      - name: Run tests
+        run: pytest model/ api/ -q
+
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

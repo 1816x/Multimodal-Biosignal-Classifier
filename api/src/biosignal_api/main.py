@@ -49,7 +49,7 @@ def root() -> ServiceInfo:
         dataset="PPG-DaLiA (UCI #495, CC BY 4.0)",
         modalities=["ecg", "ppg", "acc"],
         status=(
-            "Phase 3 — multimodal (ECG + PPG + accelerometer) activity classification at "
+            "v0.1.0 — multimodal (ECG + PPG + accelerometer) activity classification at "
             "POST /predict, plus a Claude-generated natural-language report at POST /report"
         ),
     )

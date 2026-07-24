@@ -9,5 +9,5 @@ imported explicitly by callers and land in Phases 1-2.
 """
 from . import config
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 __all__ = ["config", "__version__"]

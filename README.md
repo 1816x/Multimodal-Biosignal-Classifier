@@ -1,5 +1,7 @@
 # Multimodal Biosignal Classifier
 
+[![CI](https://github.com/1816x/multimodal-biosignal-classifier/actions/workflows/ci.yml/badge.svg)](https://github.com/1816x/multimodal-biosignal-classifier/actions/workflows/ci.yml)
+
 > ⚠️ **EDUCATIONAL PROTOTYPE — NOT A MEDICAL DEVICE.**
 > This is a learning / portfolio prototype. It is **not** an approved medical or
 > diagnostic tool, has **not** been clinically validated, and **must not be used for
@@ -56,6 +58,8 @@ model/       Python — signal preprocessing + PyTorch model
 api/         Python — FastAPI service (health/info + multimodal POST /predict + Claude report POST /report)
 dashboard/   TypeScript / Next.js — dashboard: signal plots + prediction + report (Phase 4)
 docs/        design decisions + architecture notes
+docker-compose.yml   full stack (api + dashboard) — `docker compose up`
+MODEL_CARD.md        model card — intended use, honest metrics, limitations
 ```
 
 ## Roadmap
@@ -67,7 +71,7 @@ docs/        design decisions + architecture notes
 | 2 | Add **PPG + accelerometer** (multimodal) + preprocessing tests | ✅ done |
 | 3 | **Claude API** explanation layer + prompt/disclaimer design | ✅ done |
 | 4 | **Next.js** dashboard | ✅ done |
-| 5 | `v0.1.0` release + honest metrics (incl. limitations) | ⬜ planned |
+| 5 | `v0.1.0` release + honest metrics (incl. limitations) + CI + Docker | ✅ done |
 
 ## Quickstart (development)
 
@@ -110,7 +114,24 @@ configured — set `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`) in `.e
 it returns **503** too. Copy `.env.example` to `.env` to override `DATA_DIR` /
 `MODEL_CHECKPOINT` and set the Claude API key.
 
+## Deployment
+
+The whole stack runs with **Docker Compose** — no external accounts:
+
+```bash
+docker compose up --build
+#   dashboard -> http://localhost:3000   ·   api -> http://localhost:8000
+```
+
+Without a trained checkpoint mounted, the API returns **503** and the dashboard shows
+its badged demo data — the intended honest default. Mount a checkpoint (uncomment the
+`volumes` block in `docker-compose.yml`) and set `ANTHROPIC_API_KEY` for real
+predictions and reports.
+
 ## Model metrics
+
+The full **[`MODEL_CARD.md`](MODEL_CARD.md)** covers intended use, limitations, and
+per-class numbers; the dashboard surfaces the headline figures in an "About this model" panel.
 
 **Phase 1 — ECG-only, 8-class activity recognition on PPG-DaLiA.** Reported
 **honestly**, including limitations, and not inflated. Full numbers (per-class,
@@ -156,7 +177,7 @@ with `python -m biosignal_model.train` (multimodal is the default).
 |---|---|---|---|---|---|
 | ECG-only (Phase 1) | Test (S14–S15) | 0.371 | 0.385 | 0.371 | 6,134 |
 | **Multimodal (Phase 2)** | **Test (S14–S15)** | **0.650** | **0.676** | **0.620** | **6,134** |
-| Multimodal (Phase 2) | Validation (S12–S13) | 0.712 | 0.748 | 0.744 | 6,334 |
+| Multimodal (Phase 2) | Validation (S12–S13) | 0.712 | 0.748 | 0.705 | 6,334 |
 
 Per-class **test F1, multimodal vs ECG-only**: `cycling` 0.99 (was 0.74), `table_soccer`
 **0.83 (was 0.03)**, `sitting` 0.80 (0.49), `stairs` 0.73 (0.61), `driving` 0.69 (0.30),

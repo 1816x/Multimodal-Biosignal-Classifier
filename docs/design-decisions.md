@@ -294,4 +294,41 @@ throughout. It consumes the Phase 1–3 API with **no changes to `api/`**.
 
 ---
 
-*Phase 5 will append its decisions below as it is built.*
+## Phase 5 — Release v0.1.0 (CI, deployment, model card)
+
+Phase 5 turns the working slice into a tagged `v0.1.0` release: CI across all three
+packages, a Docker Compose deployment, a model card, and honest-metrics cleanup.
+
+### Decided during Phase 5
+- **CI is tests-only, in two Python tiers.** `.github/workflows/ci.yml` runs a `light`
+  tier (`model[dev]` + `api[dev]`, no torch — `test_model`/`test_predict` self-skip via
+  `importorskip`) and a `full` tier (CPU torch + `[train]`/`[predict]`), so the "green
+  without the heavy stack" discipline is both demonstrated and enforced; the dashboard
+  job runs the existing `lint`/`typecheck`/`test`/`build` scripts. No Python
+  linter/formatter was introduced — the release doesn't churn existing code.
+- **Deployment is self-contained Docker Compose**, not a PaaS. `api/Dockerfile` (context
+  = repo root, since the API needs the sibling `model` package) + a multi-stage
+  `dashboard/Dockerfile` (Next.js `standalone` output) wired by `docker-compose.yml`
+  (`dashboard` → `api` via `API_BASE_URL`). No external accounts; without a mounted
+  checkpoint the API returns 503 and the dashboard shows its badged demo — the same
+  honest default as everywhere else.
+- **The model card ships as both a document and a panel.** `MODEL_CARD.md` is the
+  canonical record (intended use, subject-wise metrics, limitations); a compact in-app
+  "About this model" panel surfaces the headline honest numbers so predictions are read
+  with appropriate skepticism.
+- **Honest-metrics fix:** the README's Phase 2 *validation* Weighted-F1 was `0.744`, a
+  transcription error — the canonical `phase2_multimodal.json` value is `0.705` (macro F1
+  is 0.748). Corrected as part of the release.
+- **Version alignment:** the two Python packages moved `0.1.0.dev0 → 0.1.0` to match the
+  dashboard and the `v0.1.0` tag; the API's runtime status string now reports `v0.1.0`.
+
+### Honest caveat carried forward
+- The Docker images could not be built inside the development sandbox (its
+  TLS-intercepting proxy is not trusted by `pip`/`npm` in-container) — an environment
+  limitation, not a Dockerfile defect. The compose config, the dashboard `standalone`
+  output, and the package installs were validated directly; the images build normally on
+  a standard host / in CI.
+
+---
+
+*The v0.1.0 release closes the planned roadmap (Phases 0–5). Further work would start a new cycle.*
