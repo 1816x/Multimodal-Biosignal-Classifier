@@ -72,6 +72,7 @@ MODEL_CARD.md        model card — intended use, honest metrics, limitations
 | 3 | **Claude API** explanation layer + prompt/disclaimer design | ✅ done |
 | 4 | **Next.js** dashboard | ✅ done |
 | 5 | `v0.1.0` release + honest metrics (incl. limitations) + CI + Docker | ✅ done |
+| — | **v0.2** — model quality: augmentation, dropout, LR schedule, confidence calibration, all-15 retrain (test **0.650 → 0.776**; `walking` F1 **0.36 → 0.81**) | ✅ done |
 
 ## Quickstart (development)
 
@@ -148,51 +149,48 @@ confusion matrix, hyperparameters) live in
 
 | Split | Accuracy | Macro F1 | Weighted F1 | n |
 |---|---|---|---|---|
-| Validation (S12–S13) | 0.466 | 0.495 | 0.465 | 6,334 |
-| **Test (held-out S14–S15)** | **0.371** | **0.385** | 0.371 | 6,134 |
+| Validation (S12–S13) | 0.463 | 0.498 | 0.433 | 6,334 |
+| **Test (held-out S14–S15)** | **0.609** | **0.645** | 0.620 | 6,134 |
 
-Per-class on the test set (F1): `cycling` 0.74, `stairs` 0.61, `sitting` 0.49,
-`lunch_break` 0.38, `driving` 0.30, `working` 0.28, `walking` 0.26, `table_soccer`
-0.03. A ~53k-parameter 1-D CNN, trained in ~4.5 min on CPU.
+Per-class on the test set (F1): `sitting` 0.93, `cycling` 0.89, `stairs` 0.74,
+`driving` 0.68, `walking` 0.66, `working` 0.61, `lunch_break` 0.43, `table_soccer`
+0.20. A ~53k-parameter 1-D CNN, trained in ~6 min on CPU.
 
-**Honest read.** 0.371 test accuracy is roughly **3× chance** — the ECG genuinely
-carries an activity signal (exertion raises heart rate, so `cycling`/`stairs`
-separate well), but ECG alone can't see *motion*, so posture-similar classes
-(`table_soccer`, `working`, `walking`) blur together. The model also overfits the
-training subjects (best validation lands early, at epoch 2). This is exactly the
-ceiling Phase 2 is meant to lift: the wrist **accelerometer + PPG** observe movement
-directly, which is what these confusable classes need. Per the project plan the
-tests cover deterministic preprocessing; model quality is documented here with
-metrics, not asserts.
+**Honest read.** ~0.61 test accuracy is ~5× chance — the ECG carries a real activity
+signal (exertion drives heart rate), but ECG alone can't see *motion*, so `table_soccer`
+(F1 0.20) stays hard and the motion classes are capped. This is exactly the ceiling
+Phase 2 lifts: the wrist **accelerometer + PPG** observe movement directly. (Per the
+project plan the tests cover deterministic preprocessing; model quality is documented
+here with metrics, not asserts.)
 
 ### Phase 2 — multimodal (ECG + PPG + accelerometer)
 
-Fusing the wrist **PPG + 3-axis accelerometer** with the ECG lifts test accuracy from
-**0.371 → 0.650** on the **same held-out subjects (S14–S15)**, so the comparison is
-head-to-head. Full numbers in
+Fusing the wrist **PPG + 3-axis accelerometer** with the ECG lifts test accuracy to
+**0.776** on the held-out subjects (S14–S15) — a head-to-head gain over ECG-only's
+**0.609** on the *same* subjects and pipeline. Full numbers in
 [`model/metrics/phase2_multimodal.json`](model/metrics/phase2_multimodal.json); reproduce
 with `python -m biosignal_model.train` (multimodal is the default).
 
 | Model | Split | Accuracy | Macro F1 | Weighted F1 | n |
 |---|---|---|---|---|---|
-| ECG-only (Phase 1) | Test (S14–S15) | 0.371 | 0.385 | 0.371 | 6,134 |
-| **Multimodal (Phase 2)** | **Test (S14–S15)** | **0.650** | **0.676** | **0.620** | **6,134** |
-| Multimodal (Phase 2) | Validation (S12–S13) | 0.712 | 0.748 | 0.705 | 6,334 |
+| ECG-only (Phase 1) | Test (S14–S15) | 0.609 | 0.645 | 0.620 | 6,134 |
+| **Multimodal (Phase 2)** | **Test (S14–S15)** | **0.776** | **0.814** | **0.761** | **6,134** |
+| Multimodal (Phase 2) | Validation (S12–S13) | 0.768 | 0.796 | 0.760 | 6,334 |
 
-Per-class **test F1, multimodal vs ECG-only**: `cycling` 0.99 (was 0.74), `table_soccer`
-**0.83 (was 0.03)**, `sitting` 0.80 (0.49), `stairs` 0.73 (0.61), `driving` 0.69 (0.30),
-`lunch_break` 0.60 (0.38), `working` 0.41 (0.28), `walking` 0.36 (0.26). A ~158k-parameter
-model — one 1-D CNN encoder per modality, late-fused — trained in ~13.5 min on CPU.
+Per-class **test F1, multimodal vs ECG-only**: `cycling` 1.00 (was 0.89), `driving`
+**0.93 (0.68)**, `table_soccer` **0.89 (0.20)**, `sitting` 0.85 (0.93), `stairs` 0.84 (0.74),
+`walking` **0.81 (0.66)**, `lunch_break` 0.71 (0.43), `working` 0.47 (0.61). A ~158k-parameter
+model — one 1-D CNN encoder per modality, late-fused — trained in ~14 min on CPU.
 
-**Honest read.** The accelerometer supplies exactly the *motion* signal ECG lacked:
-`table_soccer` goes from effectively unlearnable (F1 0.03) to 0.83, and every class
-improves. But 0.65 is a genuine result, not a solved task — `walking` stays weakest
-(recall 0.24, still confused with `stairs`/`sitting`), and the long, sedentary look-alike
-desk activities (`working`, `lunch_break`) remain hard. **Environment caveat:** the sandbox
-disk held 14 of 15 subject files, so this run trained on **10 of Phase 1's 11 training
-subjects** (S6 omitted); validation and test are the **identical** held-out subjects
-(S12–S13 / S14–S15), which is what keeps the comparison fair. The exact split is recorded
-in the metrics JSON.
+**Honest read (v0.2).** The accelerometer supplies the *motion* signal ECG lacks, so the
+motion-heavy classes jump (`walking` 0.81, `table_soccer` 0.89, `driving` 0.93). Data
+augmentation + dropout + a cosine LR schedule closed the old overfitting gap: the best
+validation now lands at **epoch ~10** (was epoch 2) and **test (0.776) ≈ validation
+(0.768)**. Confidence is **temperature-calibrated** (T≈1.6, fit on validation) so the
+reported number is honest. Still not solved — **`working` is now the weakest class
+(F1 0.47)**, confused with `lunch_break` (both sedentary desk activities), and ECG-only
+actually reads `working`/`sitting` slightly better. This run trains on **all 15 subjects**
+(S1–S11 incl. S6 / S12–S13 / S14–S15); the earlier S6-omitted caveat no longer applies.
 
 ## Design decisions
 
