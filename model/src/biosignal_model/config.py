@@ -56,6 +56,8 @@ class ModelConfig:
     target_hz: int = 64
     num_classes: int = len(PPG_DALIA_ACTIVITIES)
     class_names: tuple[str, ...] = PPG_DALIA_ACTIVITIES
+    dropout: float = 0.3        # classifier-head dropout
+    conv_dropout: float = 0.1   # per-encoder Dropout1d (v0.2 regularization)
 
     @property
     def window_samples(self) -> int:
@@ -66,6 +68,25 @@ class ModelConfig:
 # Phase 1 = ECG only; Phase 2 = full multimodal.
 ECG_ONLY = ModelConfig(modalities=(Modality.ECG,))
 MULTIMODAL = ModelConfig(modalities=(Modality.ECG, Modality.PPG, Modality.ACC))
+
+
+@dataclass(frozen=True)
+class AugmentConfig:
+    """Train-only data augmentation knobs (v0.2), applied per window in the dataset.
+
+    Kept pure-Python and off for val/test. Defaults are gentle — enough to fight the
+    overfitting gap (best validation used to land at epoch ~2) without distorting the
+    activity signal.
+    """
+
+    enabled: bool = True
+    jitter_sigma: float = 0.05
+    scale_sigma: float = 0.10
+    max_shift: int = 16          # samples (~0.25 s at 64 Hz)
+    warp_sigma: float = 0.08
+    warp_knots: int = 4
+    prob: float = 0.5            # per-transform apply probability
+    seed: int = 1234
 
 
 @dataclass(frozen=True)
@@ -86,11 +107,13 @@ class TrainConfig:
 
     # windowing / optimization
     stride_seconds: float = 2.0     # 8 s window, 2 s hop (75% overlap), matches DaLiA's 2 s label grid
-    epochs: int = 15
+    epochs: int = 25                # v0.2: more epochs; early-stopping (patience) cuts it short
+    patience: int = 6               # stop if val accuracy hasn't improved in this many epochs
     batch_size: int = 128
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     seed: int = 42
+    augment: AugmentConfig = AugmentConfig()   # train-only augmentation (v0.2)
 
     # artifacts (checkpoint gitignored; metrics JSON is committed as the honest record)
     checkpoint_path: str = "model/checkpoints/ecg_phase1.pt"

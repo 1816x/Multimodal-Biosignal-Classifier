@@ -80,3 +80,72 @@ def normalize(x: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
     mean = np.asarray(mean, dtype=np.float32)
     std = np.asarray(std, dtype=np.float32)
     return (x - mean) / (std + _EPS)
+
+
+# --------------------------------------------------------------------------- augment
+# Train-only data augmentations (v0.2), to fight the ECG-vs-multimodal overfitting
+# gap (best validation landed at epoch ~2). All are pure numpy, operate on a single
+# ``(channels, length)`` window, take an ``np.random.Generator`` for determinism, and
+# return a new array — so they compose and are unit-testable without torch. They are
+# designed to act on already-normalized windows (the pipeline z-scores before training).
+
+
+def jitter(x: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:
+    """Add zero-mean Gaussian noise (sensor jitter)."""
+    x = np.asarray(x, dtype=np.float32)
+    return x + rng.normal(0.0, sigma, size=x.shape).astype(np.float32)
+
+
+def scaling(x: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:
+    """Multiply each channel by an independent random gain ~ N(1, sigma)."""
+    x = np.asarray(x, dtype=np.float32)
+    factor = rng.normal(1.0, sigma, size=(x.shape[0], 1)).astype(np.float32)
+    return x * factor
+
+
+def time_shift(x: np.ndarray, max_shift: int, rng: np.random.Generator) -> np.ndarray:
+    """Circularly roll the window in time by up to ``±max_shift`` samples."""
+    x = np.asarray(x, dtype=np.float32)
+    if max_shift <= 0:
+        return x
+    shift = int(rng.integers(-max_shift, max_shift + 1))
+    return np.roll(x, shift, axis=-1)
+
+
+def magnitude_warp(x: np.ndarray, sigma: float, knots: int, rng: np.random.Generator) -> np.ndarray:
+    """Multiply by a smooth per-channel amplitude curve (piecewise-linear over ``knots``)."""
+    x = np.asarray(x, dtype=np.float32)
+    length = x.shape[-1]
+    if length < 2 or knots < 1:
+        return x
+    ctrl_x = np.linspace(0.0, length - 1, num=knots + 2)
+    grid = np.arange(length)
+    out = np.empty_like(x)
+    for c in range(x.shape[0]):
+        ctrl_y = rng.normal(1.0, sigma, size=knots + 2)
+        out[c] = x[c] * np.interp(grid, ctrl_x, ctrl_y).astype(np.float32)
+    return out
+
+
+def augment_window(
+    x: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    jitter_sigma: float,
+    scale_sigma: float,
+    max_shift: int,
+    warp_sigma: float,
+    warp_knots: int,
+    prob: float,
+) -> np.ndarray:
+    """Apply each augmentation to one ``(channels, length)`` window with probability ``prob``."""
+    x = np.asarray(x, dtype=np.float32)
+    if rng.random() < prob:
+        x = jitter(x, jitter_sigma, rng)
+    if rng.random() < prob:
+        x = scaling(x, scale_sigma, rng)
+    if rng.random() < prob:
+        x = time_shift(x, max_shift, rng)
+    if rng.random() < prob:
+        x = magnitude_warp(x, warp_sigma, warp_knots, rng)
+    return x
