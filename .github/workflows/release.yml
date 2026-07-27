@@ -1,12 +1,25 @@
 name: Release
 
-# Publishes a GitHub Release when a v* tag is pushed. Notes are taken from the
-# matching CHANGELOG.md section. Educational prototype — NOT a medical device.
+# Publishes a GitHub Release. Two triggers:
+#   - push of a v* tag (normal path), or
+#   - manual workflow_dispatch (version + optional target commit), which creates the tag
+#     as well — lets a release be cut when a tag cannot be pushed directly.
+# Notes come from the matching CHANGELOG.md section.
+# Educational prototype — NOT a medical device.
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to release (e.g. v0.2.0)"
+        required: true
+      target:
+        description: "Commit SHA or ref to tag (default: this branch's HEAD)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -16,19 +29,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extract changelog notes for this tag
+      - name: Resolve version, target, and notes
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          awk -v v="$version" '
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TARGET="${{ github.event.inputs.target }}"
+            [ -z "$TARGET" ] && TARGET="${{ github.sha }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            TARGET="${{ github.sha }}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+          num="${VERSION#v}"
+          awk -v v="$num" '
             $0 ~ "^## \\[" v "\\]" {flag=1; next}
             /^## \[/ {flag=0}
             flag' CHANGELOG.md > RELEASE_NOTES.md
-          echo "----- release notes -----"; cat RELEASE_NOTES.md
-      - name: Create GitHub Release
+          echo "----- release notes for $VERSION @ $TARGET -----"; cat RELEASE_NOTES.md
+      - name: Create GitHub Release (creates the tag too)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists — skipping."
+            exit 0
+          fi
+          gh release create "$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
+            --target "$TARGET" \
+            --title "$VERSION" \
             --notes-file RELEASE_NOTES.md
