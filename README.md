@@ -74,6 +74,18 @@ MODEL_CARD.md        model card — intended use, honest metrics, limitations
 | 5 | `v0.1.0` release + honest metrics (incl. limitations) + CI + Docker | ✅ done |
 | — | **v0.2** — model quality: augmentation, dropout, LR schedule, confidence calibration, all-15 retrain (test **0.650 → 0.776**; `walking` F1 **0.36 → 0.81**) | ✅ done |
 
+## Releases
+
+Tagged, changelog-backed releases live on
+[GitHub Releases](https://github.com/1816x/Multimodal-Biosignal-Classifier/releases):
+
+| Version | Highlights |
+|---|---|
+| [**v0.2.0**](https://github.com/1816x/Multimodal-Biosignal-Classifier/releases/tag/v0.2.0) | Model quality — train-only augmentation, dropout, cosine LR + early-stopping, temperature-scaled confidence, all-15-subject retrain (test **0.650 → 0.776**) |
+| [**v0.1.0**](https://github.com/1816x/Multimodal-Biosignal-Classifier/releases/tag/v0.1.0) | First end-to-end slice: model → API → Claude report → dashboard, with CI + Docker Compose |
+
+Full notes in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Quickstart (development)
 
 Requires Python ≥ 3.10 and Node ≥ 20.
