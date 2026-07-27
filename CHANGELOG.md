@@ -6,6 +6,30 @@ to [Semantic Versioning](https://semver.org/).
 
 > ⚠️ Educational prototype — NOT a medical device.
 
+## [0.2.0] — 2026-07-26
+
+Model-quality release: better generalization and weak classes, calibrated confidence,
+and a retrain on all 15 subjects. No API contract change (512-sample window, 8 classes).
+
+### Added
+- Train-only data augmentation (jitter / scaling / time-shift / magnitude-warp), pure
+  numpy in `preprocessing.py`, applied to the train split only (val/test untouched).
+- Config-driven regularization: encoder `Dropout1d` + head dropout via `ModelConfig`.
+- Cosine LR schedule + early-stopping (patience) in training.
+- Temperature-scaling confidence calibration: fit on validation (`fit_temperature`,
+  torch-free), stored in the checkpoint, applied at inference in `predict.py`
+  (`softmax(logits / T)`; backward-compatible, defaults to T=1.0).
+
+### Changed
+- Retrained on **all 15 subjects** (S6 included); regenerated `model/metrics/*.json`.
+- Multimodal **test accuracy 0.650 → 0.776**; `walking` F1 **0.36 → 0.81**. The old
+  overfitting gap closed — best validation now lands at epoch ~10 and test ≈ validation.
+- ECG-only baseline **test 0.371 → 0.609** on the same pipeline.
+
+### Honest note
+- `working` is now the weakest class (test F1 0.47, confused with `lunch_break`); with
+  only 2 validation + 2 test subjects the metrics are noisy (val/test ordering can flip).
+
 ## [0.1.0] — 2026-07-23
 
 First tagged release: an end-to-end, **multimodal** biosignal activity classifier
@@ -35,4 +59,5 @@ subject-wise metrics and the educational disclaimer travelling with every output
 - Corrected the Phase 2 *validation* Weighted-F1 in the README (`0.744` → `0.705`) to
   match the canonical `model/metrics/phase2_multimodal.json`.
 
+[0.2.0]: https://github.com/1816x/multimodal-biosignal-classifier/releases/tag/v0.2.0
 [0.1.0]: https://github.com/1816x/multimodal-biosignal-classifier/releases/tag/v0.1.0

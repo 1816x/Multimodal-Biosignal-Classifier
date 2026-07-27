@@ -331,4 +331,38 @@ packages, a Docker Compose deployment, a model card, and honest-metrics cleanup.
 
 ---
 
-*The v0.1.0 release closes the planned roadmap (Phases 0–5). Further work would start a new cycle.*
+## v0.2 — Model quality
+
+The first post-1.0 cycle targets the honest weaknesses of the v0.1 model: a large
+overfitting gap (best validation landed at epoch ~2) and weak motion classes
+(`walking` F1 0.36). It keeps the API contract unchanged (512-sample window, same 8
+classes) and the "green without the heavy stack" test discipline.
+
+### Decided during v0.2
+- **Data augmentation as the main lever.** Train-only, per-window transforms
+  (jitter / scaling / time-shift / magnitude-warp) live in `preprocessing.py` as pure
+  numpy — so they compose and are unit-tested without torch — and are applied in the
+  dataset's `__getitem__` for the TRAIN split only (val/test untouched, no leakage).
+- **Regularization made config-driven.** Encoder `Dropout1d` + head dropout now flow from
+  `ModelConfig`; a cosine LR schedule + early-stopping replace the fixed 15-epoch loop.
+  Dropout adds no parameters, so a checkpoint stays loadable by the same architecture.
+- **Confidence is calibrated, not just reported.** Temperature scaling fits a scalar T on
+  the validation logits (`fit_temperature`, numpy/scipy, torch-free), stores it in the
+  checkpoint, and `predict.py` divides logits by T before softmax. The value the API and
+  dashboard call "confidence" is now honest rather than the raw over-confident softmax —
+  the models measured T≈1.5–1.6.
+- **Retrained on all 15 subjects.** The v0.1 S6-omission was an environment artifact, not
+  a modelling choice; v0.2 trains on the full split, so that caveat is gone.
+
+### Results (honest, as ever)
+- Multimodal **test accuracy 0.650 → 0.776**; the overfitting gap closed (best val now at
+  epoch ~10, test ≈ val). `walking` F1 **0.36 → 0.81**, `table_soccer` 0.20 → 0.89
+  (ECG-only → multimodal), `driving` up to 0.93.
+- **Honest wrinkle:** `working` is now the weakest class (F1 0.47), confused with
+  `lunch_break`; ECG-only actually reads the sedentary desk classes slightly better than
+  the multimodal model. With only 2 val + 2 test subjects the metrics are noisy — the
+  val/test ordering even flips (test > val here). Reported as-is, not tuned to look better.
+
+---
+
+*Each cycle appends its decisions here as it lands.*

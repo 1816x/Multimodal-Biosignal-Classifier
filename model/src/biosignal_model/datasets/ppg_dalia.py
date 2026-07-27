@@ -30,8 +30,14 @@ from pathlib import Path
 
 import numpy as np
 
-from ..config import NATIVE_SAMPLE_RATES_HZ, Modality, ModelConfig
-from ..preprocessing import compute_norm_stats, normalize, resample_to_common_rate, window_signal
+from ..config import NATIVE_SAMPLE_RATES_HZ, AugmentConfig, Modality, ModelConfig
+from ..preprocessing import (
+    augment_window,
+    compute_norm_stats,
+    normalize,
+    resample_to_common_rate,
+    window_signal,
+)
 from .base import BiosignalDataset
 
 TRANSIENT_ID = 0  # activity id for "between activities" — dropped from training
@@ -120,6 +126,7 @@ class PPGDaLiADataset(BiosignalDataset):
         config: ModelConfig = ModelConfig(),
         stride_seconds: float = 2.0,
         drop_transient: bool = True,
+        augment: AugmentConfig | None = None,
     ) -> None:
         if not config.modalities:
             raise ValueError("config.modalities is empty; specify at least one modality.")
@@ -128,6 +135,9 @@ class PPGDaLiADataset(BiosignalDataset):
         self.config = config
         self.stride_seconds = stride_seconds
         self.drop_transient = drop_transient
+        # Train-only augmentation (v0.2): applied per window in __getitem__. Off for val/test.
+        self._augment = augment if (augment is not None and augment.enabled) else None
+        self._aug_rng = np.random.default_rng(augment.seed) if self._augment else None
 
         self.modality_keys = [m.value for m in config.modalities]  # e.g. ["ecg", "ppg", "acc"]
         target_hz = config.target_hz
@@ -214,6 +224,15 @@ class PPGDaLiADataset(BiosignalDataset):
 
     def __getitem__(self, index: int) -> tuple[dict[str, np.ndarray], int]:
         sample = {k: self.windows[k][index] for k in self.modality_keys}  # {modality: (channels, win)}
+        if self._augment is not None:
+            a = self._augment
+            sample = {
+                k: augment_window(
+                    v, self._aug_rng, jitter_sigma=a.jitter_sigma, scale_sigma=a.scale_sigma,
+                    max_shift=a.max_shift, warp_sigma=a.warp_sigma, warp_knots=a.warp_knots, prob=a.prob,
+                )
+                for k, v in sample.items()
+            }
         return sample, int(self.labels[index])
 
     # -- convenience --

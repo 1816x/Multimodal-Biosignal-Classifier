@@ -32,7 +32,8 @@ def _torch_classes():
     class ModalityEncoder(nn.Module):
         """Small 1-D CNN: 3× (Conv → BN → ReLU → MaxPool). Returns a feature map."""
 
-        def __init__(self, in_channels: int, widths=(32, 64, 128), kernels=(7, 5, 3)):
+        def __init__(self, in_channels: int, widths=(32, 64, 128), kernels=(7, 5, 3),
+                     dropout: float = 0.0):
             super().__init__()
             layers = []
             prev = in_channels
@@ -42,6 +43,7 @@ def _torch_classes():
                     nn.BatchNorm1d(w),
                     nn.ReLU(inplace=True),
                     nn.MaxPool1d(2),
+                    nn.Dropout1d(dropout),  # channel-wise dropout (v0.2 regularization; no-op at p=0)
                 ]
                 prev = w
             self.net = nn.Sequential(*layers)
@@ -58,11 +60,13 @@ def _torch_classes():
         modality is retained for :meth:`relevant_segment`.
         """
 
-        def __init__(self, modality_keys: list[str], num_classes: int, dropout: float = 0.3):
+        def __init__(self, modality_keys: list[str], num_classes: int, dropout: float = 0.3,
+                     conv_dropout: float = 0.0):
             super().__init__()
             self.modality_keys = list(modality_keys)
             self.encoders = nn.ModuleDict(
-                {m: ModalityEncoder(CHANNELS_PER_MODALITY[m]) for m in self.modality_keys}
+                {m: ModalityEncoder(CHANNELS_PER_MODALITY[m], dropout=conv_dropout)
+                 for m in self.modality_keys}
             )
             feat_dim = sum(self.encoders[m].out_channels for m in self.modality_keys)
             self.head = nn.Sequential(
@@ -121,4 +125,9 @@ def build_model(config):
     """
     _, MultimodalClassifier = _torch_classes()
     modality_keys = [m.value for m in config.modalities]
-    return MultimodalClassifier(modality_keys, config.num_classes)
+    return MultimodalClassifier(
+        modality_keys,
+        config.num_classes,
+        dropout=getattr(config, "dropout", 0.3),
+        conv_dropout=getattr(config, "conv_dropout", 0.0),
+    )

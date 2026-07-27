@@ -139,8 +139,12 @@ def predict(inputs: dict) -> dict:
         xn = (arr.astype(np.float32) - mean) / (std + _EPS)  # (channels, win)
         tensors[m] = torch.from_numpy(np.ascontiguousarray(xn)).unsqueeze(0)  # (1, channels, win)
 
+    # Temperature-scaling calibration (v0.2): divide logits by the stored temperature
+    # before softmax so the reported confidence is calibrated. Defaults to 1.0 for
+    # checkpoints trained before calibration existed (backward-compatible).
+    temperature = float(ckpt.get("temperature", 1.0)) or 1.0
     with torch.no_grad():
-        probs = torch.softmax(model(tensors), dim=1)[0]
+        probs = torch.softmax(model(tensors) / temperature, dim=1)[0]
         idx = int(probs.argmax())
         confidence = float(probs[idx])
     start, end = model.relevant_segment(tensors, win)

@@ -37,18 +37,20 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def _build_dataset(data_dir, subjects, model_cfg, stride_seconds):
-    return PPGDaLiADataset(data_dir, subjects, model_cfg, stride_seconds=stride_seconds)
+def _build_dataset(data_dir, subjects, model_cfg, stride_seconds, augment=None):
+    return PPGDaLiADataset(data_dir, subjects, model_cfg, stride_seconds=stride_seconds, augment=augment)
 
 
 def build_splits(data_dir, model_cfg, train_cfg):
     """Load train/val/test (subject-wise) and z-score all three with train-fit stats.
 
     Normalization stats are per-modality (``{modality: (mean, std)}``), fit on the
-    TRAIN split only so no test/val statistics leak into training.
+    TRAIN split only so no test/val statistics leak into training. Augmentation (v0.2)
+    is applied to the TRAIN split only.
     """
     print(f"Loading train subjects {list(train_cfg.train_subjects)} …", flush=True)
-    train = _build_dataset(data_dir, train_cfg.train_subjects, model_cfg, train_cfg.stride_seconds)
+    train = _build_dataset(data_dir, train_cfg.train_subjects, model_cfg, train_cfg.stride_seconds,
+                           augment=train_cfg.augment)
     print(f"Loading val subjects {list(train_cfg.val_subjects)} …", flush=True)
     val = _build_dataset(data_dir, train_cfg.val_subjects, model_cfg, train_cfg.stride_seconds)
     print(f"Loading test subjects {list(train_cfg.test_subjects)} …", flush=True)
@@ -152,6 +154,42 @@ def evaluate(model, loader):
     return np.concatenate(all_t), np.concatenate(all_p)
 
 
+def evaluate_logits(model, loader):
+    """Like :func:`evaluate` but returns raw logits (for temperature calibration)."""
+    import torch
+
+    model.eval()
+    all_t, all_z = [], []
+    with torch.no_grad():
+        for x, y in loader:
+            all_z.append(model(x).cpu().numpy())
+            all_t.append(y.cpu().numpy())
+    return np.concatenate(all_t), np.concatenate(all_z)
+
+
+def fit_temperature(logits, targets, bounds=(-4.0, 4.0)) -> float:
+    """Fit a scalar temperature T>0 minimizing validation NLL of ``softmax(logits / T)``.
+
+    Pure numpy + scipy (torch-free, unit-testable). Optimizes over ``log T`` to keep
+    ``T > 0``. A well-calibrated model returns T≈1; an over-confident one returns T>1.
+    Applied at inference in ``api/.../predict.py`` so the reported confidence is calibrated.
+    """
+    from scipy.optimize import minimize_scalar
+
+    logits = np.asarray(logits, dtype=np.float64)
+    targets = np.asarray(targets, dtype=np.int64)
+    rows = np.arange(len(targets))
+
+    def nll(log_t: float) -> float:
+        z = logits / np.exp(log_t)
+        z = z - z.max(axis=1, keepdims=True)
+        log_probs = z[rows, targets] - np.log(np.exp(z).sum(axis=1))
+        return float(-log_probs.mean())
+
+    res = minimize_scalar(nll, bounds=bounds, method="bounded")
+    return float(np.exp(res.x))
+
+
 def train_model(model, train_ds, val_ds, train_cfg, class_names):
     import torch
     from torch import nn
@@ -162,8 +200,11 @@ def train_model(model, train_ds, val_ds, train_cfg, class_names):
     criterion = nn.CrossEntropyLoss(weight=weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=train_cfg.learning_rate,
                                  weight_decay=train_cfg.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=train_cfg.epochs, eta_min=train_cfg.learning_rate * 0.01)
+    patience = getattr(train_cfg, "patience", 0)
 
-    best_val, best_state = -1.0, None
+    best_val, best_state, since_best = -1.0, None, 0
     for epoch in range(1, train_cfg.epochs + 1):
         model.train()
         running, n = 0.0, 0
@@ -176,6 +217,7 @@ def train_model(model, train_ds, val_ds, train_cfg, class_names):
             bs = y.shape[0]  # x is a {modality: tensor} dict, so count from the labels
             running += loss.item() * bs
             n += bs
+        scheduler.step()
         targets, preds = evaluate(model, val_loader)
         val_acc = float((targets == preds).mean())
         print(f"epoch {epoch:2d}/{train_cfg.epochs}  train_loss={running/n:.4f}  "
@@ -183,6 +225,12 @@ def train_model(model, train_ds, val_ds, train_cfg, class_names):
         if val_acc > best_val:
             best_val = val_acc
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            since_best = 0
+        else:
+            since_best += 1
+            if patience and since_best >= patience:
+                print(f"early stop at epoch {epoch} (no val gain in {patience} epochs)", flush=True)
+                break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -215,6 +263,9 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=defaults.weight_decay)
     parser.add_argument("--stride-seconds", type=float, default=defaults.stride_seconds)
     parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--patience", type=int, default=defaults.patience,
+                        help="early-stopping patience in epochs (0 disables)")
+    parser.add_argument("--no-augment", action="store_true", help="disable train-time augmentation")
     parser.add_argument("--out", default=None, help="checkpoint output path (default: per-phase preset)")
     parser.add_argument("--metrics", default=None, help="metrics JSON output path (default: per-phase preset)")
     parser.add_argument("--train-subjects", type=_subject_list, default=None,
@@ -231,6 +282,7 @@ def main() -> None:
     train_cfg = replace(
         base, epochs=args.epochs, batch_size=args.batch_size, learning_rate=args.lr,
         weight_decay=args.weight_decay, stride_seconds=args.stride_seconds, seed=args.seed,
+        patience=args.patience, augment=replace(base.augment, enabled=not args.no_augment),
         checkpoint_path=args.out or base.checkpoint_path, metrics_path=args.metrics or base.metrics_path,
         train_subjects=args.train_subjects or base.train_subjects,
         val_subjects=args.val_subjects or base.val_subjects,
@@ -260,10 +312,13 @@ def main() -> None:
     # honest evaluation on the held-out (subject-disjoint) test set
     targets, preds = evaluate(model, _loader(test_ds, train_cfg.batch_size, shuffle=False))
     test_report = metrics_report(targets, preds, list(model_cfg.class_names))
-    val_t, val_p = evaluate(model, _loader(val_ds, train_cfg.batch_size, shuffle=False))
-    val_report = metrics_report(val_t, val_p, list(model_cfg.class_names))
+    # validation: collect logits (for temperature calibration) and derive predictions from them
+    val_t, val_logits = evaluate_logits(model, _loader(val_ds, train_cfg.batch_size, shuffle=False))
+    val_report = metrics_report(val_t, val_logits.argmax(axis=1), list(model_cfg.class_names))
+    temperature = fit_temperature(val_logits, val_t)
     print_report("VALIDATION (subjects %s)" % list(train_cfg.val_subjects), val_report, model_cfg.class_names)
     print_report("TEST (held-out subjects %s)" % list(train_cfg.test_subjects), test_report, model_cfg.class_names)
+    print(f"\ncalibrated temperature: T={temperature:.3f}  (fit on validation logits)")
 
     # ---- persist checkpoint (gitignored) ----
     ckpt_path = Path(train_cfg.checkpoint_path)
@@ -277,6 +332,7 @@ def main() -> None:
             "target_hz": model_cfg.target_hz,
             # per-modality z-score stats: {modality: {"mean": (C,1), "std": (C,1)}}
             "norm_stats": {k: {"mean": mn, "std": sd} for k, (mn, sd) in norm_stats.items()},
+            "temperature": float(temperature),
             "test_metrics": test_report,
         },
         ckpt_path,
@@ -298,9 +354,12 @@ def main() -> None:
         "hyperparams": {"epochs": train_cfg.epochs, "batch_size": train_cfg.batch_size,
                         "lr": train_cfg.learning_rate, "weight_decay": train_cfg.weight_decay,
                         "stride_seconds": train_cfg.stride_seconds, "seed": train_cfg.seed,
-                        "class_weighted_loss": True},
+                        "class_weighted_loss": True, "patience": train_cfg.patience,
+                        "augment": train_cfg.augment.enabled, "lr_scheduler": "cosine",
+                        "dropout": model_cfg.dropout, "conv_dropout": model_cfg.conv_dropout},
         "model_params": int(n_params),
         "best_val_accuracy": float(best_val),
+        "temperature": float(temperature),
         "validation": val_report,
         "test": test_report,
         "elapsed_seconds": round(time.time() - t_start, 1),

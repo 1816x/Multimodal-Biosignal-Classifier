@@ -22,9 +22,13 @@ Built as a learning / portfolio project; see [`README.md`](README.md) and
 - **Parameters:** **53,256** (ECG‑only) · **157,896** (multimodal).
 - **Input:** one 8‑second window per modality, resampled to a shared **64 Hz**
   grid → **512** samples (ECG, PPG; accelerometer as 512 `[x, y, z]` triples).
-- **Output:** predicted activity, softmax confidence, and a crude
-  `relevant_segment` (temporal arg‑max of the last conv feature map — a
-  localization *hint*, **not** a calibrated attribution).
+- **Output:** predicted activity, **temperature‑calibrated** confidence (softmax of
+  `logits / T`, with T fit on validation), and a crude `relevant_segment` (temporal
+  arg‑max of the last conv feature map — a localization *hint*, **not** a calibrated
+  attribution).
+- **Regularization (v0.2):** train‑time data augmentation (jitter / scaling /
+  time‑shift / magnitude‑warp), encoder + head dropout, and a cosine LR schedule with
+  early‑stopping.
 - **Classes:** `sitting`, `stairs`, `table_soccer`, `cycling`, `driving`,
   `lunch_break`, `walking`, `working`.
 
@@ -57,12 +61,15 @@ Built as a learning / portfolio project; see [`README.md`](README.md) and
 
 | | |
 |---|---|
-| Epochs | 15 (best‑validation checkpoint kept) |
+| Epochs | 25 max · cosine LR schedule · early‑stopping (patience 6) · best‑val checkpoint kept |
 | Batch size | 128 |
 | Learning rate | 1e‑3 (Adam), weight decay 1e‑4 |
 | Window / stride | 8 s / 2 s |
 | Sampling rate | 64 Hz (shared fusion base) |
 | Loss | cross‑entropy, **class‑weighted** (inverse frequency) |
+| Augmentation (train only) | jitter · scaling · time‑shift · magnitude‑warp |
+| Dropout | 0.3 (head) · 0.1 (encoders) |
+| Calibration | temperature scaling (T fit on validation) |
 | Seed | 42 |
 
 Class weighting counters strong activity imbalance (`lunch_break` alone is ~30% of
@@ -77,30 +84,31 @@ alongside. Full numbers, per‑class breakdowns, and confusion matrices live in
 
 | Model | Split | Accuracy | Macro F1 | Weighted F1 | n |
 |---|---|---|---|---|---|
-| ECG‑only (Phase 1) | Validation (S12–S13) | 0.466 | 0.495 | 0.465 | 6,334 |
-| ECG‑only (Phase 1) | **Test (S14–S15)** | **0.371** | **0.385** | 0.371 | 6,134 |
-| Multimodal (Phase 2) | Validation (S12–S13) | 0.712 | 0.748 | 0.705 | 6,334 |
-| **Multimodal (Phase 2)** | **Test (S14–S15)** | **0.650** | **0.676** | 0.620 | 6,134 |
+| ECG‑only (Phase 1) | Validation (S12–S13) | 0.463 | 0.498 | 0.433 | 6,334 |
+| ECG‑only (Phase 1) | **Test (S14–S15)** | **0.609** | **0.645** | 0.620 | 6,134 |
+| Multimodal (Phase 2) | Validation (S12–S13) | 0.768 | 0.796 | 0.760 | 6,334 |
+| **Multimodal (Phase 2)** | **Test (S14–S15)** | **0.776** | **0.814** | 0.761 | 6,134 |
 
-**Per‑class test F1 (multimodal vs ECG‑only):** `cycling` 0.99 (was 0.74),
-`table_soccer` **0.83 (was 0.03)**, `sitting` 0.80 (0.49), `stairs` 0.73 (0.61),
-`driving` 0.69 (0.30), `lunch_break` 0.60 (0.38), `working` 0.41 (0.28),
-`walking` 0.36 (0.26).
+**Per‑class test F1 (multimodal vs ECG‑only):** `cycling` 1.00 (0.89), `driving`
+**0.93 (0.68)**, `table_soccer` **0.89 (0.20)**, `sitting` 0.85 (0.93), `stairs` 0.84
+(0.74), `walking` **0.81 (0.66)**, `lunch_break` 0.71 (0.43), `working` 0.47 (0.61).
 
-**Read:** ECG‑only lands at ~3× chance; adding the wrist **accelerometer + PPG**
-supplies the *motion* signal ECG lacks and lifts test accuracy to **0.650** (~5×
-chance) on the *same* held‑out subjects — `table_soccer` goes from effectively
-unlearnable to 0.83. But 0.65 is a genuine result, **not** a solved task.
+**Read (v0.2):** ECG‑only is ~5× chance; adding the wrist **accelerometer + PPG** plus
+the v0.2 regularization lifts test accuracy to **0.776** on the *same* held‑out subjects.
+The motion classes jump (`walking` 0.36→0.81, `table_soccer` 0.20→0.89, `driving`
+0.68→0.93) and the overfitting gap closes — best validation now lands at **epoch ~10**
+(was epoch 2) and **test ≈ validation**. Still **not** a solved task — see limitations.
 
 ## Limitations
 
-- **Weakest classes:** `walking` stays weak (test F1 0.36, recall ~0.24, confused
-  with `stairs`/`sitting`); the long, sedentary look‑alikes `working`/`lunch_break`
-  remain hard.
-- **ECG‑only ceiling:** ECG cannot observe motion, so posture‑similar classes blur
-  — that ceiling is the whole reason the multimodal model exists.
-- **Overfitting:** best validation lands early (epoch ~2); the net memorizes the
-  training subjects. The best‑val checkpoint is kept; no tuning on test subjects.
+- **Weakest class:** `working` is now the weakest (test F1 0.47, recall 0.32) — the
+  model confuses it with `lunch_break` (both sedentary desk activities), and ECG‑only
+  actually reads `working`/`sitting` slightly better than the multimodal model.
+- **ECG‑only ceiling:** ECG cannot observe motion, so `table_soccer` (F1 0.20) and other
+  motion‑defined classes stay capped without the accelerometer.
+- **Small held‑out set:** validation and test are 2 subjects each, so the numbers are
+  noisy — the val/test ordering can even flip (here test > val). Treat single figures
+  with appropriate error bars.
 - **64 Hz resampling:** well below what ECG *morphology* (QRS shape) needs — fine
   for activity/heart‑rate dynamics, but **not** a cardiac‑grade pipeline.
 - **Truncation alignment:** modalities are aligned by truncation to a common
@@ -110,10 +118,8 @@ unlearnable to 0.83. But 0.65 is a genuine result, **not** a solved task.
 - **The report explains the prediction, not the raw signal:** the Claude report is
   generated from the numeric output (class + confidence + segment); it cannot add
   clinical insight the model never had.
-- **Environment caveat:** the Phase 2 run trained on **10 of 11** training subjects
-  (S6 omitted due to sandbox disk); validation/test are the identical held‑out
-  subjects, so the ECG‑vs‑multimodal comparison stays fair. Exact split is in the
-  metrics JSON.
+- **All 15 subjects (v0.2):** the model now trains on all 15 subjects (S1–S11 incl. S6
+  / S12–S13 / S14–S15); the earlier S6‑omitted caveat no longer applies.
 
 ## Ethical considerations
 
